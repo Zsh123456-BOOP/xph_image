@@ -12,9 +12,9 @@ from utils import build_graph, train_epoch, evaluate, EarlyStopping
 def get_args():
     parser = argparse.ArgumentParser()
     # 数据参数
-    parser.add_argument('--train_file', type=str, default='assist-09/train.csv')
-    parser.add_argument('--valid_file', type=str, default='assist-09/valid.csv')
-    parser.add_argument('--test_file', type=str, default='assist-09/test.csv')
+    parser.add_argument('--train_file', type=str, default='assist_09/train.csv')
+    parser.add_argument('--valid_file', type=str, default='assist_09/valid.csv')
+    parser.add_argument('--test_file', type=str, default='assist_09/test.csv')
     parser.add_argument('--graph_dir', type=str, default='./graphs', 
                         help="Directory to save/load graph files. Graphs are dataset-specific (named by dimensions).")
 
