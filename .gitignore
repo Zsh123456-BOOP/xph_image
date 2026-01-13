@@ -1,0 +1,23 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.class
+
+# 虚拟环境 (防止把几百兆的库传上去)
+xph_env/
+env/
+venv/
+.env
+
+# IDE 配置
+.idea/
+.vscode/
+
+
+
+# 忽略所有的 .pth 和 .pt 模型文件
+*.pth
+*.pt
+
+# 忽略 checkpoints 文件夹下的所有内容（如果你不希望任何 checkpoints 被提交）
+checkpoints/
