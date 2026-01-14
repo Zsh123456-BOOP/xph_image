@@ -9,9 +9,9 @@
     "IndependenceScore_(1-NMI_mean)": 0.9780576829412342
   },
   "Exp-1B_Align": {
-    "RowConcentrationScore_mean(top1/mean_abs)": 2.6188451590443798,
-    "RowEntropy_mean(lower_better)": 4.572752354721192,
-    "AssignmentMeanAbsCorr": 0.09363956018145614,
+    "RowConcentrationScore_mean(top1/mean_abs)": 2.6188451855411805,
+    "RowEntropy_mean(lower_better)": 4.572752301218341,
+    "AssignmentMeanAbsCorr": 0.0936395600854515,
     "AssignmentMedianAbsCorr": 0.08921714357509127,
     "MatchRate@0.10": 0.3821138211382114,
     "MatchRate@0.15": 0.10569105691056911,
@@ -28,12 +28,12 @@
     "ks_k_at_high": 0.4474388062953949,
     "A_spearman_mean": 0.0,
     "A_spearman_pos_rate": 0.0,
-    "C_std_mean": 0.010690804501052753,
+    "C_std_mean": 0.010690802895491439,
     "A_range_mean": 0.0,
-    "C_range_mean": 0.035680982032014676,
+    "C_range_mean": 0.035680974542628974,
     "EffectRatio(A_range/C_range)": 0.0,
-    "leakage_mean_all_dims": 0.06148787960410118,
-    "leakage_mean_other_dims": 0.08529514819383621,
+    "leakage_mean_all_dims": 0.061487872153520584,
+    "leakage_mean_other_dims": 0.06017895042896271,
     "note": "Good: A monotonic↑ (high spearman, pos_rate), C stable (low std/range), effect_ratio>>1, low leakage."
   }
 }
