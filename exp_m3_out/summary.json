@@ -1,9 +1,18 @@
 {
   "out_dir": "/home/zsh/xph_image/exp_m3_out",
-  "focus_exercise": 517,
+  "num_concepts": 123,
+  "mask_sanity": {
+    "ok": true,
+    "median_abs_delta_logit": 0.09118064818107996,
+    "mean_abs_delta_logit": 0.8233055360559558,
+    "n": 80,
+    "mask_effective": true
+  },
+  "generated_attribution_and_interaction": true,
+  "focus_exercise_single": 8572,
+  "generated_global_interaction": false,
   "qnoise_rows": 10,
-  "strat_rows": 30,
   "hard_rows": 5,
   "attr_rows": 197,
-  "note": "Exp-3C uses synergy Syn(i,j) instead of outer(att,att)."
+  "note": "If mask_effective=False, Exp-3B/3C are skipped as model-head defect."
 }

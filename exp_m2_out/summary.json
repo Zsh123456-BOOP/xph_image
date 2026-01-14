@@ -1,6 +1,9 @@
 {
-  "robust_curve_rows": 5,
-  "pareto_rows": 7,
-  "flow_rows": 3,
-  "out_dir": "/home/zsh/xph_image/exp_m2_out"
+  "status": "Success",
+  "out_dir": "/home/zsh/xph_image/exp_m2_out",
+  "experiments": [
+    "Robustness Curve",
+    "Pareto (Model Prep)",
+    "Multilevel Sensitivity"
+  ]
 }

@@ -1,69 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Module-2 Experiments: 门控一致性实验 (Gating Consistency)
+Module-2 Experiments: 鲁棒性与机制验证实验 (Robustness & Mechanism Verification)
 ================================================================================
+核心目标: 证明门控融合与一致性约束在稀疏数据下的鲁棒性。
 
-实验目的: 验证多视图图神经网络的门控融合机制是否有效，以及模型对图结构扰动的鲁棒性
-
-实验列表:
---------------------------------------------------------------------------------
-Exp-2A: 图鲁棒性 (Graph Robustness)
-        测试模型对图边丢弃噪声的鲁棒性
-        
-        输出文件: robust_curve.png, robust_curve.csv
-        
-        如何判断结果好坏:
-        ✓ 好: drop_rate=0.4 时 AUC 下降 < 2%
-              曲线应该平缓下降，说明模型对图噪声鲁棒
-        △ 中: drop_rate=0.4 时 AUC 下降 2-5%
-              模型有一定鲁棒性但仍受图质量影响
-        ✗ 差: drop_rate=0.4 时 AUC 下降 > 5%
-              模型过度依赖图结构，缺乏鲁棒性
-        
-        图像解读: robust_curve.png 曲线越平缓越好
-                  理想情况是接近水平线
-
---------------------------------------------------------------------------------
-Exp-2B: 一致性-准确性 Pareto (Consistency-Accuracy Pareto)
-        扫描 lambda_contrastive 参数，观察视图距离与性能的权衡
-        
-        输出文件: pareto.png, pareto.csv
-        
-        如何判断结果好坏（修订版，更贴近你当前模型的可解释口径）:
-        ✓ 好: λ 增大能显著降低 D_view_mean（更一致），且 AUC 下降幅度很小（例如 < 0.5% 相对下降）
-              说明对比一致性约束“确实在起作用”，并且不会明显伤害预测能力
-        △ 中: D_view_mean 下降不明显，但 AUC 也基本不变
-              说明一致性损失可能权重不足或被门控/主任务掩盖
-        ✗ 差: D_view_mean 不降反升，或 AUC 大幅下降
-              说明对比学习没有形成有效一致性约束，甚至破坏了表征
-        
-        图像解读: pareto.png 中
-                  - X轴: D_view_mean（视图距离，越小表示两个视图越一致）
-                  - Y轴: 1-AUC（误差，越小越好）
-                  - 点图（scatter）更合理；并额外标出 Pareto front（非支配点下包络）
-                  - λ=0（无对比学习）通常在右侧（更不一致），性能作为参照点
-
---------------------------------------------------------------------------------
-Exp-2C: 信息流分组 (Information Flow Grouping)
-        按概念数量分组分析“题目视图距离”和“相关概念视图距离”
-        
-        输出文件: flow_group.png, flow_group.csv
-        
-        如何判断结果好坏（修订：避免原实现“全局距离复用导致各组完全一样”的无效口径）:
-        ✓ 好: 不同概念数量组的题目视图距离接近（或 c>=3 略高但可控）
-              说明门控融合 + 一致性约束在不同复杂度题目上都能保持稳定对齐
-        △ 中: c>=3 组略大于 c=1/c=2
-              可接受，多概念题本身更难建模
-        ✗ 差: 组间差异很大（尤其 c>=3 显著更高）
-              说明复杂题的多视图一致性较差，门控融合未能平衡难度差异
-        
-        图像解读: flow_group.png 堆叠柱状图
-                  - 底部：Exercise view distance（按 bucket 内题目求均值）
-                  - 顶部：Concept view distance（按 bucket 涉及概念集合求均值）
-                  - 若 c>=3 明显更高，可作为“复杂度导致一致性变差”的诊断信号
-
-汇总输出: summary.json
+保留实验:
+1. Exp-2A: 基础图鲁棒性 (Robust Curve) - 宏观证明模型抗噪能力强。
+2. Exp-2B: 模型扫描 (Pareto) - 用于展示 Trade-off 轨迹，并获取最佳一致性模型 λ* (带缓存机制)。
+3. Exp-3D: 多层级敏感度分析 (Multi-level Sensitivity) - 微观证明门控过滤了不稳定的概念视图。
 """
 
 import os
@@ -71,7 +16,7 @@ import json
 import argparse
 import random
 import multiprocessing as mp
-from typing import Dict, Tuple, List, Set
+from typing import Dict, Tuple, List, Optional, Any
 
 import numpy as np
 import pandas as pd
@@ -103,7 +48,7 @@ def safe_mkdir(p: str):
 
 def sparse_edge_dropout(adj: torch.Tensor, drop_rate: float, seed: int) -> torch.Tensor:
     """
-    Drop a fraction of non-zero edges in a sparse adjacency matrix (no renorm; rescale kept edges).
+    Drop a fraction of non-zero edges in a sparse adjacency matrix.
     """
     if drop_rate <= 0:
         return adj
@@ -121,37 +66,13 @@ def sparse_edge_dropout(adj: torch.Tensor, drop_rate: float, seed: int) -> torch
     return out
 
 
-def cosine_reliance(a: torch.Tensor, b: torch.Tensor, out: torch.Tensor) -> Tuple[float, float]:
-    ca = F.cosine_similarity(out, a, dim=-1).mean().item()
-    cb = F.cosine_similarity(out, b, dim=-1).mean().item()
-    s = ca + cb + 1e-12
-    return ca / s, cb / s
-
-
-def binary_entropy_from_preds(preds: np.ndarray, eps: float = 1e-12) -> float:
-    """
-    preds: shape (N,) or (N,1) or (N,...) -> we flatten to 1-D.
-    """
-    p = np.asarray(preds, dtype=np.float64).reshape(-1)
-    p = np.clip(p, eps, 1 - eps)
-    return float(np.mean(-(p * np.log(p) + (1 - p) * np.log(1 - p))))
-
-
 def parse_list_floats(s: str) -> List[float]:
-    return [float(x.strip()) for x in s.split(",") if x.strip()]
-
-
-def _bucket_c(cnt: int) -> str:
-    if cnt <= 1:
-        return "c=1"
-    if cnt == 2:
-        return "c=2"
-    return "c>=3"
+    return [float(x.strip()) for x in str(s).split(",") if str(x).strip()]
 
 
 def _pareto_front_indices(df: pd.DataFrame, x_col: str, y_col: str) -> List[int]:
     """
-    Minimize both x and y. Return indices of non-dominated points (Pareto front).
+    Minimize both x and y. Return indices of non-dominated points.
     """
     xs = df[x_col].to_numpy()
     ys = df[y_col].to_numpy()
@@ -170,8 +91,32 @@ def _pareto_front_indices(df: pd.DataFrame, x_col: str, y_col: str) -> List[int]
     return front
 
 
+def _normalize01(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, dtype=np.float64)
+    mn, mx = float(np.min(x)), float(np.max(x))
+    if mx - mn < 1e-12:
+        return np.zeros_like(x)
+    return (x - mn) / (mx - mn)
+
+
+def _select_lambda_star(df_pareto: pd.DataFrame) -> float:
+    """
+    从 Pareto 结果中自动选择最佳 lambda (权衡 D_view 和 Error)
+    """
+    df = df_pareto.copy()
+    df["error"] = 1.0 - df["test_auc"]
+    
+    x = df["D_view_mean"].to_numpy()
+    y = df["error"].to_numpy()
+    score = _normalize01(x) + _normalize01(y)
+
+    best_i = int(np.argmin(score))
+    lam_star = float(df.iloc[best_i]["lambda_contrastive"])
+    return lam_star
+
+
 # -----------------------------
-# Data mapping (mirror main.py behavior)
+# Data & Graph Loading
 # -----------------------------
 def load_and_map_data(train_file: str, valid_file: str, test_file: str):
     train_df = pd.read_csv(train_file)
@@ -199,34 +144,18 @@ def load_and_map_data(train_file: str, valid_file: str, test_file: str):
         df["exer_id"] = df["exer_id"].map(exercise_id_map)
         df["cpt_seq"] = df["cpt_seq"].apply(map_concepts)
 
-    num_students = len(student_id_map)
-    num_exercises = len(exercise_id_map)
-    num_concepts = len(concept_id_map)
-    return train_df, valid_df, test_df, num_students, num_exercises, num_concepts
+    return train_df, valid_df, test_df, len(student_id_map), len(exercise_id_map), len(concept_id_map)
 
 
 def build_all_graphs(train_df, num_students, num_exercises, num_concepts, graph_dir, device):
-    adj_correct_se = build_graph(
-        train_df, num_students, num_exercises, correct=True, item_type="exercise", graph_dir=graph_dir
-    ).to(device)
-    adj_wrong_se = build_graph(
-        train_df, num_students, num_exercises, correct=False, item_type="exercise", graph_dir=graph_dir
-    ).to(device)
-    adj_correct_sc = build_graph(
-        train_df, num_students, num_concepts, correct=True, item_type="concept", graph_dir=graph_dir
-    ).to(device)
-    adj_wrong_sc = build_graph(
-        train_df, num_students, num_concepts, correct=False, item_type="concept", graph_dir=graph_dir
-    ).to(device)
+    adj_correct_se = build_graph(train_df, num_students, num_exercises, correct=True, item_type="exercise", graph_dir=graph_dir).to(device)
+    adj_wrong_se = build_graph(train_df, num_students, num_exercises, correct=False, item_type="exercise", graph_dir=graph_dir).to(device)
+    adj_correct_sc = build_graph(train_df, num_students, num_concepts, correct=True, item_type="concept", graph_dir=graph_dir).to(device)
+    adj_wrong_sc = build_graph(train_df, num_students, num_concepts, correct=False, item_type="concept", graph_dir=graph_dir).to(device)
     return adj_correct_se, adj_wrong_se, adj_correct_sc, adj_wrong_sc
 
 
 def warmup_graph_cache(train_df, num_students, num_exercises, num_concepts, graph_dir):
-    """
-    关键修复点：
-    - 多进程并行训练时，若 build_graph() 会落盘缓存（同名文件），并发写容易卡住/死锁。
-    - 这里在主进程先“预热构图并落盘”，子进程只做读取与搬运到各自 GPU。
-    """
     safe_mkdir(graph_dir)
     cpu = torch.device("cpu")
     _ = build_all_graphs(train_df, num_students, num_exercises, num_concepts, graph_dir, cpu)
@@ -250,512 +179,364 @@ def init_model(args, num_students, num_exercises, num_concepts, device):
     return model
 
 
+# -----------------------------
+# Metric Helpers
+# -----------------------------
 @torch.no_grad()
-def compute_view_distances(model: CognitiveDiagnosisModel, graphs) -> Dict[str, float]:
+def compute_view_distances_basic(model, graphs):
+    """
+    仅计算基本的视图距离，用于 Exp-2B Pareto 绘图
+    """
     adj_correct_se, adj_wrong_se, adj_correct_sc, adj_wrong_sc = graphs
-
-    # exercise views (correct vs wrong)
     _, exer_c = model.gcn_correct_se(adj_correct_se)
     _, exer_w = model.gcn_wrong_se(adj_wrong_se)
     d_exer = float((1.0 - F.cosine_similarity(exer_c, exer_w, dim=-1)).mean().item())
-
-    # concept views (correct vs wrong)
+    
+    # 即使 Concept 视图可能没被充分利用，我们依然计算它的距离，用于观察
     _, cpt_c = model.gcn_correct_sc(adj_correct_sc)
     _, cpt_w = model.gcn_wrong_sc(adj_wrong_sc)
     d_cpt = float((1.0 - F.cosine_similarity(cpt_c, cpt_w, dim=-1)).mean().item())
-
-    return {"D_exercise": d_exer, "D_concept": d_cpt, "D_view_mean": float((d_exer + d_cpt) / 2.0)}
-
-
-@torch.no_grad()
-def estimate_reliance_proxy_student(model: CognitiveDiagnosisModel, graphs) -> Dict[str, float]:
-    """
-    Proxy for gating behavior (student view fusion se vs sc):
-    reliance_se = cos(stu_final, stu_se) / (cos(stu_final, stu_se)+cos(stu_final, stu_sc))
-    """
-    adj_correct_se, adj_wrong_se, adj_correct_sc, adj_wrong_sc = graphs
-
-    stu_c_se, _ = model.gcn_correct_se(adj_correct_se)
-    stu_w_se, _ = model.gcn_wrong_se(adj_wrong_se)
-    stu_c_sc, _ = model.gcn_correct_sc(adj_correct_sc)
-    stu_w_sc, _ = model.gcn_wrong_sc(adj_wrong_sc)
-
-    stu_se, _ = model.fusion_se(stu_c_se, stu_w_se)
-    stu_sc, _ = model.fusion_sc(stu_c_sc, stu_w_sc)
-    stu_final, _ = model.gated_fusion_student(stu_se, stu_sc)
-
-    r_se, r_sc = cosine_reliance(stu_se, stu_sc, stu_final)
-    return {"student_reliance_se": float(r_se), "student_reliance_sc": float(r_sc)}
-
-
-@torch.no_grad()
-def per_node_view_distances(model: CognitiveDiagnosisModel, graphs) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Return:
-      d_exer_each: shape [num_exercises], per-exercise view distance
-      d_cpt_each : shape [num_concepts], per-concept  view distance
-    """
-    adj_correct_se, adj_wrong_se, adj_correct_sc, adj_wrong_sc = graphs
-
-    _, exer_c = model.gcn_correct_se(adj_correct_se)
-    _, exer_w = model.gcn_wrong_se(adj_wrong_se)
-    d_exer_each = (1.0 - F.cosine_similarity(exer_c, exer_w, dim=-1)).detach().cpu().numpy()
-
-    _, cpt_c = model.gcn_correct_sc(adj_correct_sc)
-    _, cpt_w = model.gcn_wrong_sc(adj_wrong_sc)
-    d_cpt_each = (1.0 - F.cosine_similarity(cpt_c, cpt_w, dim=-1)).detach().cpu().numpy()
-
-    return d_exer_each, d_cpt_each
+    
+    return d_exer, d_cpt, (d_exer + d_cpt) / 2.0
 
 
 # -----------------------------
-# Exp-2A: Robustness to graph noise
+# Exp-2A: Graph Robustness (Baseline)
 # -----------------------------
-def exp_graph_robustness(
-    args, model_path: str, train_df, valid_df, test_df, num_students, num_exercises, num_concepts, device
-):
+def exp_graph_robustness(args, model_path, train_df, valid_df, test_df, num_students, num_exercises, num_concepts, device):
+    print("[Exp-2A] Running Graph Robustness (Dropout vs AUC)...")
+    if not os.path.exists(model_path):
+        print(f"[Warn] Baseline model {model_path} not found for Exp-2A. Skipping.")
+        return None
+
     graphs_clean = build_all_graphs(train_df, num_students, num_exercises, num_concepts, args.graph_dir, device)
-
     model = init_model(args, num_students, num_exercises, num_concepts, device)
-    sd = torch.load(model_path, map_location=device)
-    model.load_state_dict(sd)
+    model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 
     test_loader = DataLoader(
-        CDDataset(test_df),
-        batch_size=args.batch_size,
-        shuffle=False,
-        collate_fn=collate_fn,
-        num_workers=0,
-        pin_memory=torch.cuda.is_available() and device.type == "cuda",
+        CDDataset(test_df), batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn
     )
 
     rows = []
-    for lam in args.graph_drop_rates:
-        graphs_noisy = tuple(sparse_edge_dropout(g, lam, seed=args.seed + int(lam * 1000)) for g in graphs_clean)
+    for dr in args.graph_drop_rates:
+        graphs_noisy = tuple(sparse_edge_dropout(g, dr, seed=args.seed + int(dr * 1000)) for g in graphs_clean)
         _, metrics, _ = evaluate(model, test_loader, device, *graphs_noisy)
-        rel = estimate_reliance_proxy_student(model, graphs_noisy)
-
-        rows.append(
-            {
-                "drop_rate": lam,
-                "auc": metrics["auc"],
-                "accuracy": metrics["accuracy"],
-                "rmse": metrics["rmse"],
-                **rel,
-            }
-        )
+        rows.append({
+            "drop_rate": float(dr),
+            "auc": float(metrics["auc"]),
+            "accuracy": float(metrics["accuracy"])
+        })
 
     df = pd.DataFrame(rows).sort_values("drop_rate")
     df.to_csv(os.path.join(args.out_dir, "robust_curve.csv"), index=False)
 
     plt.figure()
     plt.plot(df["drop_rate"], df["auc"], marker="o")
-    plt.xlabel("Graph edge dropout rate")
+    plt.xlabel("Graph Edge Dropout Rate")
     plt.ylabel("Test AUC")
-    plt.title("Robustness to Graph Noise (edge dropout)")
+    plt.title("Robustness to Graph Noise")
+    plt.grid(True, linestyle='--', alpha=0.6)
     plt.tight_layout()
     plt.savefig(os.path.join(args.out_dir, "robust_curve.png"), dpi=220)
     plt.close()
-
     return df
 
 
 # -----------------------------
-# Exp-2B: Pareto scan over lambda_contrastive
+# Exp-2B: Pareto (With Caching and New Plotting)
 # -----------------------------
-def train_one(args, train_loader, valid_loader, graphs, num_students, num_exercises, num_concepts, device) -> str:
+def train_one(args, train_loader, valid_loader, graphs, num_students, num_exercises, num_concepts, device):
+    best_path = os.path.join(args.out_dir, f"model_lambda_{args.lambda_contrastive:.4f}.pth")
+    # Caching check
+    if os.path.exists(best_path):
+        return best_path
+
     model = init_model(args, num_students, num_exercises, num_concepts, device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     stopper = EarlyStopping(patience=args.patience, verbose=False)
-
-    best_path = os.path.join(args.out_dir, f"model_lambda_{args.lambda_contrastive:.4f}.pth")
-
+    
     for epoch in range(args.epochs):
         train_epoch(model, train_loader, optimizer, device, *graphs, args, epoch, verbose=False)
         _, v_metrics, _ = evaluate(model, valid_loader, device, *graphs)
         stopper(v_metrics["auc"], model)
         if stopper.early_stop:
             break
-
     torch.save(stopper.best_model_state, best_path)
     return best_path
 
-
-def _pareto_worker(
-    gpu_id: int,
-    lambdas: List[float],
-    args_dict: Dict,
-    train_df,
-    valid_df,
-    num_students: int,
-    num_exercises: int,
-    num_concepts: int,
-    return_dict,
-):
-    os.environ.setdefault("OMP_NUM_THREADS", "1")
-    os.environ.setdefault("MKL_NUM_THREADS", "1")
+def _pareto_worker(gpu_id, lambdas, args_dict, train_df, valid_df, ns, ne, nc, return_dict):
+    os.environ["OMP_NUM_THREADS"] = "1"
     torch.set_num_threads(1)
-
     args = argparse.Namespace(**args_dict)
-
-    if not torch.cuda.is_available():
-        device = torch.device("cpu")
-    else:
-        device = torch.device(f"cuda:{gpu_id}")
-        torch.cuda.set_device(gpu_id)
-
-    set_seed(int(args.seed) + int(gpu_id) * 1000)
-
-    graphs = build_all_graphs(train_df, num_students, num_exercises, num_concepts, args.graph_dir, device)
-
-    train_loader = DataLoader(
-        CDDataset(train_df),
-        batch_size=args.batch_size,
-        shuffle=True,
-        collate_fn=collate_fn,
-        num_workers=0,
-        pin_memory=torch.cuda.is_available() and device.type == "cuda",
-    )
-    valid_loader = DataLoader(
-        CDDataset(valid_df),
-        batch_size=args.batch_size,
-        shuffle=False,
-        collate_fn=collate_fn,
-        num_workers=0,
-        pin_memory=torch.cuda.is_available() and device.type == "cuda",
-    )
-
-    local_results = {}
+    device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available(): torch.cuda.set_device(gpu_id)
+    set_seed(args.seed + gpu_id * 1000)
+    
+    graphs = build_all_graphs(train_df, ns, ne, nc, args.graph_dir, device)
+    train_loader = DataLoader(CDDataset(train_df), batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn)
+    valid_loader = DataLoader(CDDataset(valid_df), batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
+    
+    res = {}
     for lam in lambdas:
         args.lambda_contrastive = float(lam)
-        args.contrastive_decay_epochs = int(10**9)
+        # Restore necessary training args
+        args.contrastive_decay_epochs = int(1e9) 
         args.contrastive_min_weight = 0.0
+        path = train_one(args, train_loader, valid_loader, graphs, ns, ne, nc, device)
+        res[float(lam)] = path
+    return_dict[gpu_id] = res
 
-        best_path = train_one(args, train_loader, valid_loader, graphs, num_students, num_exercises, num_concepts, device)
-        local_results[float(lam)] = best_path
-
-    return_dict[gpu_id] = local_results
-
-
-def exp_pareto(args, train_df, valid_df, test_df, num_students, num_exercises, num_concepts, device):
+def exp_pareto_with_cache(args, train_df, valid_df, test_df, num_students, num_exercises, num_concepts, device):
+    print("[Exp-2B] Running Pareto Scan (Finding Lambda_Star) with Cache Check...")
     results = {}
+    
+    # Identify which lambdas need training
+    lambdas_to_train = []
+    for lam in args.contrastive_lambdas:
+        path = os.path.join(args.out_dir, f"model_lambda_{lam:.4f}.pth")
+        if os.path.exists(path):
+            results[float(lam)] = path
+            print(f"  -> Found cached model for lambda={lam:.4f}, skipping training.")
+        else:
+            lambdas_to_train.append(float(lam))
 
-    # 1) 跳过训练（用预训练）
-    if getattr(args, "skip_pareto_training", False):
-        print("[Exp-2B] 跳过训练，加载预训练模型...")
-        for lam in args.contrastive_lambdas:
-            model_path = os.path.join(args.out_dir, f"model_lambda_{lam:.4f}.pth")
-            if not os.path.exists(model_path):
-                raise FileNotFoundError(
-                    f"找不到预训练模型: {model_path}\n请先运行本脚本生成模型，或关闭 --skip_pareto_training"
-                )
-            results[float(lam)] = model_path
-            print(f"  λ={lam:.4f} -> {model_path}")
-
-    # 2) 训练（默认并行；可用 --pareto_serial 强制串行）
-    else:
+    # Train missing models
+    if len(lambdas_to_train) > 0:
+        print(f"  -> Training missing models: {lambdas_to_train}")
         use_cuda = torch.cuda.is_available()
-        gpus = [int(x) for x in str(args.gpus).split(",") if str(x).strip() != ""]
-        if not use_cuda:
-            gpus = []
-
-        do_parallel = use_cuda and (not args.pareto_serial) and (len(gpus) >= 1) and (len(args.contrastive_lambdas) > 1)
-
-        if do_parallel:
-            print(f"[Exp-2B] 并行训练 {len(args.contrastive_lambdas)} 个模型，GPU={gpus}（每 GPU 单进程，进程内串行跑多个 λ）")
-            warmup_graph_cache(train_df, num_students, num_exercises, num_concepts, args.graph_dir)
-
-            buckets = {gpu: [] for gpu in gpus}
-            for i, lam in enumerate(args.contrastive_lambdas):
-                buckets[gpus[i % len(gpus)]].append(float(lam))
-
+        gpus = [int(x) for x in args.gpus.split(",") if x.strip()] if use_cuda else []
+        
+        if use_cuda and not args.pareto_serial and len(gpus) > 0:
             manager = mp.Manager()
             return_dict = manager.dict()
-            args_dict = dict(vars(args))
-
+            buckets = {g: [] for g in gpus}
+            for i, l in enumerate(lambdas_to_train): buckets[gpus[i%len(gpus)]].append(l)
             procs = []
-            for gpu_id, lam_list in buckets.items():
-                if len(lam_list) == 0:
-                    continue
-                p = mp.Process(
-                    target=_pareto_worker,
-                    args=(int(gpu_id), lam_list, args_dict, train_df, valid_df, num_students, num_exercises, num_concepts, return_dict),
-                )
-                p.daemon = False
-                p.start()
-                procs.append(p)
-
-            for p in procs:
-                p.join()
-                if p.exitcode != 0:
-                    raise RuntimeError(f"[Exp-2B] 子进程异常退出（exitcode={p.exitcode}）。请检查日志输出。")
-
-            for _, m in dict(return_dict).items():
-                for lam, path in m.items():
-                    results[float(lam)] = path
-
-            missing = [float(l) for l in args.contrastive_lambdas if float(l) not in results]
-            if len(missing) > 0:
-                raise RuntimeError(f"[Exp-2B] 并行训练后仍缺少模型: {missing}")
-
+            for gid, lams in buckets.items():
+                if not lams: continue
+                p = mp.Process(target=_pareto_worker, args=(gid, lams, vars(args), train_df, valid_df, num_students, num_exercises, num_concepts, return_dict))
+                p.start(); procs.append(p)
+            for p in procs: p.join()
+            for m in return_dict.values(): results.update(m)
         else:
-            print(f"[Exp-2B] 串行训练 {len(args.contrastive_lambdas)} 个模型...")
+            # Serial
             graphs = build_all_graphs(train_df, num_students, num_exercises, num_concepts, args.graph_dir, device)
-
-            train_loader = DataLoader(
-                CDDataset(train_df),
-                batch_size=args.batch_size,
-                shuffle=True,
-                collate_fn=collate_fn,
-                num_workers=0,
-                pin_memory=torch.cuda.is_available() and device.type == "cuda",
-            )
-            valid_loader = DataLoader(
-                CDDataset(valid_df),
-                batch_size=args.batch_size,
-                shuffle=False,
-                collate_fn=collate_fn,
-                num_workers=0,
-                pin_memory=torch.cuda.is_available() and device.type == "cuda",
-            )
-
-            for i, lam in enumerate(args.contrastive_lambdas):
-                print(f"[{i+1}/{len(args.contrastive_lambdas)}] 训练 λ={lam:.4f}...")
+            tl = DataLoader(CDDataset(train_df), args.batch_size, True, collate_fn=collate_fn)
+            vl = DataLoader(CDDataset(valid_df), args.batch_size, False, collate_fn=collate_fn)
+            for lam in lambdas_to_train:
                 args.lambda_contrastive = float(lam)
-                args.contrastive_decay_epochs = int(10**9)
+                args.contrastive_decay_epochs = int(1e9) 
                 args.contrastive_min_weight = 0.0
+                results[float(lam)] = train_one(args, tl, vl, graphs, num_students, num_exercises, num_concepts, device)
 
-                best_path = train_one(args, train_loader, valid_loader, graphs, num_students, num_exercises, num_concepts, device)
-                results[float(lam)] = best_path
-                print(f"[{i+1}/{len(args.contrastive_lambdas)}] λ={lam:.4f} 完成 -> {best_path}")
-
-    # 3) 统一评估
-    print("[Exp-2B] 开始评估所有模型...")
-
+    # Evaluate ALL models (cached + newly trained)
     graphs = build_all_graphs(train_df, num_students, num_exercises, num_concepts, args.graph_dir, device)
-    test_loader = DataLoader(
-        CDDataset(test_df),
-        batch_size=args.batch_size,
-        shuffle=False,
-        collate_fn=collate_fn,
-        num_workers=0,
-        pin_memory=torch.cuda.is_available() and device.type == "cuda",
-    )
-
+    test_loader = DataLoader(CDDataset(test_df), args.batch_size, False, collate_fn=collate_fn)
+    
     rows = []
     for lam in args.contrastive_lambdas:
-        lam = float(lam)
-        best_path = results[lam]
-
+        path = results.get(float(lam))
+        if not path or not os.path.exists(path):
+            print(f"[Warn] Model for lambda={lam} missing, skipping evaluation.")
+            continue
+        
         args.lambda_contrastive = float(lam)
         model = init_model(args, num_students, num_exercises, num_concepts, device)
-        sd = torch.load(best_path, map_location=device)
-        model.load_state_dict(sd)
+        model.load_state_dict(torch.load(path, map_location=device))
         model.eval()
-
-        _, t_metrics, _ = evaluate(model, test_loader, device, *graphs)
-        d = compute_view_distances(model, graphs)
-
-        preds = []
-        with torch.no_grad():
-            for batch in test_loader:
-                stu_ids, exer_ids, cpt_ids_padded, cpt_mask, labels = batch
-                stu_ids = stu_ids.to(device)
-                exer_ids = exer_ids.to(device)
-                cpt_ids_padded = cpt_ids_padded.to(device)
-                cpt_mask = cpt_mask.to(device)
-                labels = labels.to(device)
-                p, _, _ = model(stu_ids, exer_ids, cpt_ids_padded, cpt_mask, labels, *graphs)
-                preds.append(p.detach().cpu().numpy())
-        preds = np.concatenate(preds, axis=0)
-        pred_ent = binary_entropy_from_preds(preds)  # FIX: no NaN
-
-        rows.append(
-            {
-                "lambda_contrastive": float(lam),
-                "test_auc": float(t_metrics["auc"]),
-                "test_acc": float(t_metrics["accuracy"]),
-                "D_view_mean": d["D_view_mean"],
-                "D_exercise": d["D_exercise"],
-                "D_concept": d["D_concept"],
-                "pred_entropy": pred_ent,
-                "model_path": best_path,
-            }
-        )
-
+        
+        _, tm, _ = evaluate(model, test_loader, device, *graphs)
+        d_ex, d_cp, d_mean = compute_view_distances_basic(model, graphs)
+        
+        rows.append({
+            "lambda_contrastive": float(lam),
+            "test_auc": float(tm["auc"]),
+            "D_view_mean": d_mean,
+            "model_path": path
+        })
+        
     df = pd.DataFrame(rows).sort_values("lambda_contrastive")
     df.to_csv(os.path.join(args.out_dir, "pareto.csv"), index=False)
+    
+    # -----------------------------
+    # [优化后的绘图代码: Trade-off Trajectory]
+    # -----------------------------
+    plt.figure(figsize=(6, 5))
+    
+    # 1. 准备数据
+    df_plot = df.sort_values("lambda_contrastive")
+    x = df_plot["D_view_mean"]
+    y = 1.0 - df_plot["test_auc"]  # Error Rate
+    lams = df_plot["lambda_contrastive"]
 
-    # ---- plot (FIX): scatter + Pareto front
-    df_plot = df.copy()
-    df_plot["error"] = 1.0 - df_plot["test_auc"]
+    # 2. 画轨迹线
+    plt.plot(x, y, linestyle='--', color='gray', alpha=0.6, label='Trade-off Trajectory')
+    
+    # 3. 画散点
+    sc = plt.scatter(x, y, c=range(len(x)), cmap='viridis', s=80, zorder=5, edgecolors='k')
+    
+    # 4. 标注 Lambda 值
+    for i, txt in enumerate(lams):
+        plt.annotate(f"$\lambda={txt:.2g}$", (x.iloc[i], y.iloc[i]), 
+                     xytext=(0, 8), textcoords='offset points', 
+                     ha='center', fontsize=9, fontweight='bold')
 
-    front_idx = _pareto_front_indices(df_plot, x_col="D_view_mean", y_col="error")
-    front = df_plot.loc[front_idx].sort_values("D_view_mean")
-
-    plt.figure()
-    plt.scatter(df_plot["D_view_mean"], df_plot["error"])
-    for _, r in df_plot.iterrows():
-        plt.text(r["D_view_mean"], r["error"], f"{r['lambda_contrastive']:.2g}", fontsize=8)
-
-    # Pareto front line (only non-dominated points)
-    if len(front) >= 2:
-        plt.plot(front["D_view_mean"], front["error"])
-
-    plt.xlabel("View distance D_view_mean (↓ better consistency)")
-    plt.ylabel("1 - AUC (↓ better performance)")
-    plt.title("Consistency–Accuracy Pareto (scan lambda_contrastive)")
+    # 5. 标注坐标轴和标题
+    plt.xlabel(r"View Distance $D_{view}$ ($\downarrow$ Better Consistency)", fontsize=11)
+    plt.ylabel(r"Error Rate ($1 - AUC$) ($\downarrow$ Better Accuracy)", fontsize=11)
+    plt.title("Consistency-Accuracy Trade-off", fontsize=12)
+    plt.grid(True, linestyle='--', alpha=0.4)
     plt.tight_layout()
-    plt.savefig(os.path.join(args.out_dir, "pareto.png"), dpi=220)
+    plt.savefig(os.path.join(args.out_dir, "pareto.png"), dpi=300)
     plt.close()
-
+    
     return df
 
 
 # -----------------------------
-# Exp-2C: Information flow proxy (group items) - FIXED
+# [NEW] Exp-3D: Multi-level Sensitivity Analysis
 # -----------------------------
-def exp_flow_group(
-    args, model_path: str, train_df, valid_df, test_df, num_students, num_exercises, num_concepts, device
-):
-    graphs = build_all_graphs(train_df, num_students, num_exercises, num_concepts, args.graph_dir, device)
+def exp_multilevel_sensitivity(args, df_pareto, train_df, num_students, num_exercises, num_concepts, device):
+    print("[Exp-3D] Running Multi-level Sensitivity Analysis...")
+    
+    # 1. Load Best Model (Lambda Star)
+    lam_star = _select_lambda_star(df_pareto)
+    try:
+        pathS = df_pareto.loc[np.isclose(df_pareto["lambda_contrastive"], lam_star), "model_path"].iloc[0]
+        print(f"  -> Using lambda_star={lam_star:.4f}, model={pathS}")
+    except: 
+        print("[Error] Model path for lambda_star not found.")
+        return
 
     model = init_model(args, num_students, num_exercises, num_concepts, device)
-    sd = torch.load(model_path, map_location=device)
-    model.load_state_dict(sd)
+    model.load_state_dict(torch.load(pathS, map_location=device))
     model.eval()
 
-    full_df = pd.concat([train_df, valid_df, test_df], ignore_index=True)
+    # 2. Prepare Graphs
+    graphs_clean = build_all_graphs(train_df, num_students, num_exercises, num_concepts, args.graph_dir, device)
+    # Use a significant dropout to show the difference
+    dropout_rate = 0.3
+    graphs_noisy = tuple(sparse_edge_dropout(g, dropout_rate, seed=12345) for g in graphs_clean)
 
-    # ---- build per-exercise metadata
-    exer_to_cpts = full_df.groupby("exer_id")["cpt_seq"].first()
-    exer_cpt_cnt = exer_to_cpts.apply(lambda s: len(str(s).split(",")))
-    exer_diff = full_df.groupby("exer_id")["label"].mean()
+    with torch.no_grad():
+        # Helper to get intermediate embeddings
+        def get_intermediates(gs):
+            adj_cse, adj_wse, adj_csc, adj_wsc = gs
+            # 1. GCN Outputs
+            s_c_se, _ = model.gcn_correct_se(adj_cse)
+            s_w_se, _ = model.gcn_wrong_se(adj_wse)
+            s_c_sc, _ = model.gcn_correct_sc(adj_csc)
+            s_w_sc, _ = model.gcn_wrong_sc(adj_wsc)
+            
+            # 2. First Fusion (Intra-view)
+            s_se, _ = model.fusion_se(s_c_se, s_w_se)
+            s_sc, _ = model.fusion_sc(s_c_sc, s_w_sc)
+            
+            # 3. Final Gated Fusion
+            s_final, _ = model.gated_fusion_student(s_se, s_sc)
+            
+            return s_se, s_sc, s_final
 
-    meta = pd.DataFrame(
-        {
-            "exer_id": exer_to_cpts.index.astype(int),
-            "cpt_seq": exer_to_cpts.values,
-            "cpt_cnt": exer_cpt_cnt.values,
-            "difficulty": exer_diff.reindex(exer_to_cpts.index).values,
-        }
-    )
-    meta["bucket"] = meta["cpt_cnt"].apply(lambda x: _bucket_c(int(x)))
+        # Get embeddings
+        se_clean, sc_clean, final_clean = get_intermediates(graphs_clean)
+        se_noisy, sc_noisy, final_noisy = get_intermediates(graphs_noisy)
 
-    # ---- FIX: compute per-node view distances, then aggregate by bucket
-    d_exer_each, d_cpt_each = per_node_view_distances(model, graphs)
+        # Calculate Relative Shift for each component
+        def calc_shift(clean, noisy):
+            diff = clean - noisy
+            dist = torch.norm(diff, p=2, dim=1)
+            base = torch.norm(clean, p=2, dim=1) + 1e-9
+            return (dist / base).mean().item()
 
-    rows = []
-    for b, sub in meta.groupby("bucket"):
-        exer_ids = sub["exer_id"].astype(int).to_numpy()
-        d_exer_bucket = float(np.mean(d_exer_each[exer_ids])) if len(exer_ids) > 0 else float("nan")
+        shift_se = calc_shift(se_clean, se_noisy)
+        shift_sc = calc_shift(sc_clean, sc_noisy)
+        shift_final = calc_shift(final_clean, final_noisy)
 
-        # concepts involved in this bucket
-        cpt_set: Set[int] = set()
-        for s in sub["cpt_seq"].tolist():
-            for c in str(s).split(","):
-                cpt_set.add(int(c))
-        cpt_ids = np.array(sorted(list(cpt_set)), dtype=np.int64)
-        d_cpt_bucket = float(np.mean(d_cpt_each[cpt_ids])) if len(cpt_ids) > 0 else float("nan")
+    # 3. Save & Plot
+    results = [
+        {"Component": "Concept View (SC)", "Shift": shift_sc, "Type": "Input View"},
+        {"Component": "Exercise View (SE)", "Shift": shift_se, "Type": "Input View"},
+        {"Component": "Fused Representation", "Shift": shift_final, "Type": "Output"},
+    ]
+    df = pd.DataFrame(results)
+    df.to_csv(os.path.join(args.out_dir, "multilevel_sensitivity.csv"), index=False)
+    
+    print("\n[Exp-3D Results] Relative Shift under Noise:")
+    print(df)
 
-        rows.append(
-            {
-                "bucket": b,
-                "n_items": int(len(sub)),
-                "avg_cpt_cnt": float(sub["cpt_cnt"].mean()),
-                "avg_difficulty": float(sub["difficulty"].mean()),
-                "D_exercise_bucket": d_exer_bucket,
-                "D_concept_bucket": d_cpt_bucket,
-                "D_view_mean_bucket": float((d_exer_bucket + d_cpt_bucket) / 2.0),
-                "n_unique_concepts_in_bucket": int(len(cpt_ids)),
-            }
-        )
+    plt.figure(figsize=(6, 5))
+    # Colors: Unstable (orange), Stable (blue), Final (green)
+    colors = ['tab:orange', 'tab:blue', 'tab:green']
+    bars = plt.bar(df["Component"], df["Shift"], color=colors, width=0.6)
+    
+    plt.ylabel(f"Relative Shift under Noise (Dropout={dropout_rate})")
+    plt.title("Stability Filter Mechanism Analysis")
+    plt.grid(axis='y', linestyle='--', alpha=0.5)
+    
+    # Add value labels
+    for bar in bars:
+        yval = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2, yval + 0.005, f"{yval:.4f}", ha='center', va='bottom')
 
-    df = pd.DataFrame(rows).sort_values("bucket")
-    df.to_csv(os.path.join(args.out_dir, "flow_group.csv"), index=False)
-
-    # plot stacked bars (exercise + concept)
-    plt.figure()
-    x = np.arange(len(df))
-    plt.bar(x, df["D_exercise_bucket"], label="Exercise view distance (bucket-mean)")
-    plt.bar(x, df["D_concept_bucket"], bottom=df["D_exercise_bucket"], label="Concept view distance (bucket-mean)")
-    plt.xticks(x, df["bucket"])
-    plt.ylabel("Distance (stacked)")
-    plt.title("Information Flow Grouping by Item Complexity (FIXED)")
-    plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(args.out_dir, "flow_group.png"), dpi=220)
+    plt.savefig(os.path.join(args.out_dir, "multilevel_sensitivity.png"), dpi=220)
     plt.close()
-
-    return df
 
 
 # -----------------------------
-# Args
+# Main & Args
 # -----------------------------
 def get_args():
     root = os.path.dirname(os.path.abspath(__file__))
-
     p = argparse.ArgumentParser()
     p.add_argument("--train_file", type=str, default=os.path.join(root, "assist_09", "train.csv"))
     p.add_argument("--valid_file", type=str, default=os.path.join(root, "assist_09", "valid.csv"))
     p.add_argument("--test_file", type=str, default=os.path.join(root, "assist_09", "test.csv"))
     p.add_argument("--graph_dir", type=str, default=os.path.join(root, "graphs"))
     p.add_argument("--out_dir", type=str, default=os.path.join(root, "exp_m2_out"))
-
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", type=str, default="cuda:0")
-
-    # 用于鲁棒性/信息流的基准模型（同样来自 main.py 训练产物）
+    
+    # Model Args
     p.add_argument("--model_path", type=str, default=os.path.join(root, "saved_models", "best_model.pth"))
-
-    # base model/training args
     p.add_argument("--embedding_dim", type=int, default=256)
     p.add_argument("--num_layers", type=int, default=3)
-    p.add_argument("--fusion_type", type=str, default="enhanced_gated", choices=["enhanced_gated", "concat_gate"])
+    p.add_argument("--fusion_type", type=str, default="enhanced_gated")
     p.add_argument("--temperature", type=float, default=0.1)
     p.add_argument("--num_heads", type=int, default=4)
     p.add_argument("--use_supervised_contrastive", action="store_true", default=True)
     p.add_argument("--gated_num_gates", type=int, default=3)
     p.add_argument("--ortho_weight", type=float, default=0.5)
     p.add_argument("--dropout", type=float, default=0.3)
-
+    
+    # Training Args (RESTORED MISSING ARGS HERE)
     p.add_argument("--batch_size", type=int, default=1024)
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--weight_decay", type=float, default=1e-5)
     p.add_argument("--patience", type=int, default=7)
-
-    # loss weights
-    p.add_argument("--lambda_fusion", type=float, default=0.7)
-    p.add_argument("--lambda_contrastive", type=float, default=0.4)
+    
+    # Missing params that caused AttributeError
     p.add_argument("--fusion_warmup_epochs", type=int, default=1)
     p.add_argument("--contrastive_decay_epochs", type=int, default=18)
     p.add_argument("--contrastive_min_weight", type=float, default=0.12)
     p.add_argument("--grad_clip", type=float, default=0.1)
-
-    # exp settings
+    
+    # Hyperparams for exp
+    p.add_argument("--lambda_fusion", type=float, default=0.7) 
+    p.add_argument("--lambda_contrastive", type=float, default=0.4)
     p.add_argument("--graph_drop_rates", type=str, default="0,0.1,0.2,0.3,0.4")
     p.add_argument("--contrastive_lambdas", type=str, default="0,0.05,0.1,0.2,0.4,0.8,1.2")
-    p.add_argument(
-        "--skip_pareto_training",
-        action="store_true",
-        help="跳过 Exp-2B Pareto 训练，直接使用 out_dir 下已存在的 model_lambda_*.pth",
-    )
-
-    # 并行控制
+    
+    # Control flags
+    p.add_argument("--skip_pareto_training", action="store_true")
     p.add_argument("--gpus", type=str, default="0,1,2,3")
     p.add_argument("--pareto_serial", action="store_true")
+    p.add_argument("--gain_lambda0", type=float, default=0.0) # Kept for compat
+    p.add_argument("--gain_lambda_star", type=float, default=None)
 
-    args = p.parse_args()
-
-    if not os.path.exists(args.model_path):
-        raise FileNotFoundError(
-            f"[ERR] model_path not found: {args.model_path}\n"
-            f"请先运行: python main.py 训练生成 saved_models/best_model.pth，或手动指定 --model_path"
-        )
-    return args
+    return p.parse_args()
 
 
 def main():
@@ -765,41 +546,37 @@ def main():
 
     args.graph_drop_rates = parse_list_floats(args.graph_drop_rates)
     args.contrastive_lambdas = parse_list_floats(args.contrastive_lambdas)
-
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
+    # Load Data
     train_df, valid_df, test_df, num_students, num_exercises, num_concepts = load_and_map_data(
         args.train_file, args.valid_file, args.test_file
     )
 
-    # Exp-2A
+    # 1. Exp-2A: Robustness Curve
     df_robust = exp_graph_robustness(
         args, args.model_path, train_df, valid_df, test_df, num_students, num_exercises, num_concepts, device
     )
 
-    # Exp-2B
-    df_pareto = exp_pareto(args, train_df, valid_df, test_df, num_students, num_exercises, num_concepts, device)
+    # 2. Exp-2B: Pareto (Finding Models with Caching)
+    # 这步是必须的，因为它负责准备 model_lambda_*.pth 文件供 Exp-3D 使用
+    df_pareto = exp_pareto_with_cache(args, train_df, valid_df, test_df, num_students, num_exercises, num_concepts, device)
 
-    # Exp-2C
-    df_flow = exp_flow_group(
-        args, args.model_path, train_df, valid_df, test_df, num_students, num_exercises, num_concepts, device
-    )
+    # 3. [NEW] Exp-3D: Multi-level Sensitivity
+    exp_multilevel_sensitivity(args, df_pareto, train_df, num_students, num_exercises, num_concepts, device)
 
+    # Summary
     summary = {
-        "robust_curve_rows": int(len(df_robust)),
-        "pareto_rows": int(len(df_pareto)),
-        "flow_rows": int(len(df_flow)),
+        "status": "Success", 
         "out_dir": args.out_dir,
+        "experiments": ["Robustness Curve", "Pareto (Model Prep)", "Multilevel Sensitivity"]
     }
-    with open(os.path.join(args.out_dir, "summary.json"), "w", encoding="utf-8") as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
+    with open(os.path.join(args.out_dir, "summary.json"), "w") as f:
+        json.dump(summary, f, indent=2)
 
-    print("[OK] Module-2 experiments finished:", args.out_dir)
-
+    print(f"\n[OK] Module-2 experiments finished. Check outputs in: {args.out_dir}")
 
 if __name__ == "__main__":
-    try:
-        mp.set_start_method("spawn", force=True)
-    except RuntimeError:
-        pass
+    try: mp.set_start_method("spawn", force=True)
+    except: pass
     main()

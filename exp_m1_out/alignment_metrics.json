@@ -1,9 +1,0 @@
-{
-  "RowConcentrationScore_mean(top1/mean_abs)": 2.6188451855411805,
-  "RowEntropy_mean(lower_better)": 4.572752301218341,
-  "AssignmentMeanAbsCorr": 0.0936395600854515,
-  "AssignmentMedianAbsCorr": 0.08921714357509127,
-  "MatchRate@0.10": 0.3821138211382114,
-  "MatchRate@0.15": 0.10569105691056911,
-  "note": "No diagonal requirement. Use row concentration + permutation-invariant assignment score."
-}
