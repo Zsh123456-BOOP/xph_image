@@ -1,0 +1,13 @@
+{
+  "mode": "single_exercise",
+  "focus_exercise": 8572,
+  "concepts": [
+    1,
+    24,
+    31,
+    48
+  ],
+  "n_users": 11,
+  "delta1_mean_abs": 0.33428265685844616,
+  "syn_mean_abs": 0.1033543797761577
+}

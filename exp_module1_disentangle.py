@@ -512,13 +512,18 @@ def get_args():
     root = os.path.dirname(os.path.abspath(__file__))
     p = argparse.ArgumentParser()
 
-    # Paths
-    p.add_argument("--train_file", type=str, default=os.path.join(root, "assist_09", "train.csv"))
-    p.add_argument("--valid_file", type=str, default=os.path.join(root, "assist_09", "valid.csv"))
-    p.add_argument("--test_file",  type=str, default=os.path.join(root, "assist_09", "test.csv"))
-    p.add_argument("--graph_dir",  type=str, default=os.path.join(root, "graphs"))
-    p.add_argument("--out_dir",    type=str, default=os.path.join(root, "exp_m1_final"))
-    p.add_argument("--model_path", type=str, default=os.path.join(root, "saved_models", "best_model.pth"))
+    # Dataset selection (NEW)
+    p.add_argument("--dataset", type=str, default="assist_09",
+                   choices=["assist_09", "assist_17", "junyi"],
+                   help="选择数据集：assist_09, assist_17, junyi")
+
+    # Paths (will be overridden based on dataset)
+    p.add_argument("--train_file", type=str, default=None)
+    p.add_argument("--valid_file", type=str, default=None)
+    p.add_argument("--test_file",  type=str, default=None)
+    p.add_argument("--graph_dir",  type=str, default=None)
+    p.add_argument("--out_dir",    type=str, default=None)
+    p.add_argument("--model_path", type=str, default=None)
 
     # Model Config
     p.add_argument("--device", type=str, default="cuda:0")
@@ -547,8 +552,33 @@ def get_args():
     p.add_argument("--max_specialists_to_plot", type=int, default=5)
 
     args = p.parse_args()
+    
+    # Auto-configure paths based on dataset
+    dataset = args.dataset
+    data_dir = os.path.join(root, "data", dataset)
+    
+    if args.train_file is None:
+        args.train_file = os.path.join(data_dir, "train.csv")
+    if args.valid_file is None:
+        args.valid_file = os.path.join(data_dir, "valid.csv")
+    if args.test_file is None:
+        args.test_file = os.path.join(data_dir, "test.csv")
+    if args.graph_dir is None:
+        args.graph_dir = os.path.join(root, "graphs", dataset)
+    if args.out_dir is None:
+        args.out_dir = os.path.join(root, "exp_m1_out", dataset)
+    if args.model_path is None:
+        # Try dataset-specific model first, then fallback to default
+        model_path_dataset = os.path.join(root, "saved_models", dataset, "best_model.pth")
+        model_path_default = os.path.join(root, "saved_models", "best_model.pth")
+        if os.path.exists(model_path_dataset):
+            args.model_path = model_path_dataset
+        else:
+            args.model_path = model_path_default
+    
     if not os.path.exists(args.model_path):
         raise FileNotFoundError(f"[ERR] model_path not found: {args.model_path}")
+    
     return args
 
 

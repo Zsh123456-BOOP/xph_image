@@ -8,7 +8,6 @@ Module-2 Experiments: 鲁棒性与机制验证实验 (Robustness & Mechanism Ver
 保留实验:
 1. Exp-2A: 基础图鲁棒性 (Robust Curve) - 宏观证明模型抗噪能力强。
 2. Exp-2B: 模型扫描 (Pareto) - 用于展示 Trade-off 轨迹，并获取最佳一致性模型 λ* (带缓存机制)。
-3. Exp-3D: 多层级敏感度分析 (Multi-level Sensitivity) - 微观证明门控过滤了不稳定的概念视图。
 """
 
 import os
@@ -394,95 +393,6 @@ def exp_pareto_with_cache(args, train_df, valid_df, test_df, num_students, num_e
     return df
 
 
-# -----------------------------
-# [NEW] Exp-3D: Multi-level Sensitivity Analysis
-# -----------------------------
-def exp_multilevel_sensitivity(args, df_pareto, train_df, num_students, num_exercises, num_concepts, device):
-    print("[Exp-3D] Running Multi-level Sensitivity Analysis...")
-    
-    # 1. Load Best Model (Lambda Star)
-    lam_star = _select_lambda_star(df_pareto)
-    try:
-        pathS = df_pareto.loc[np.isclose(df_pareto["lambda_contrastive"], lam_star), "model_path"].iloc[0]
-        print(f"  -> Using lambda_star={lam_star:.4f}, model={pathS}")
-    except: 
-        print("[Error] Model path for lambda_star not found.")
-        return
-
-    model = init_model(args, num_students, num_exercises, num_concepts, device)
-    model.load_state_dict(torch.load(pathS, map_location=device))
-    model.eval()
-
-    # 2. Prepare Graphs
-    graphs_clean = build_all_graphs(train_df, num_students, num_exercises, num_concepts, args.graph_dir, device)
-    # Use a significant dropout to show the difference
-    dropout_rate = 0.3
-    graphs_noisy = tuple(sparse_edge_dropout(g, dropout_rate, seed=12345) for g in graphs_clean)
-
-    with torch.no_grad():
-        # Helper to get intermediate embeddings
-        def get_intermediates(gs):
-            adj_cse, adj_wse, adj_csc, adj_wsc = gs
-            # 1. GCN Outputs
-            s_c_se, _ = model.gcn_correct_se(adj_cse)
-            s_w_se, _ = model.gcn_wrong_se(adj_wse)
-            s_c_sc, _ = model.gcn_correct_sc(adj_csc)
-            s_w_sc, _ = model.gcn_wrong_sc(adj_wsc)
-            
-            # 2. First Fusion (Intra-view)
-            s_se, _ = model.fusion_se(s_c_se, s_w_se)
-            s_sc, _ = model.fusion_sc(s_c_sc, s_w_sc)
-            
-            # 3. Final Gated Fusion
-            s_final, _ = model.gated_fusion_student(s_se, s_sc)
-            
-            return s_se, s_sc, s_final
-
-        # Get embeddings
-        se_clean, sc_clean, final_clean = get_intermediates(graphs_clean)
-        se_noisy, sc_noisy, final_noisy = get_intermediates(graphs_noisy)
-
-        # Calculate Relative Shift for each component
-        def calc_shift(clean, noisy):
-            diff = clean - noisy
-            dist = torch.norm(diff, p=2, dim=1)
-            base = torch.norm(clean, p=2, dim=1) + 1e-9
-            return (dist / base).mean().item()
-
-        shift_se = calc_shift(se_clean, se_noisy)
-        shift_sc = calc_shift(sc_clean, sc_noisy)
-        shift_final = calc_shift(final_clean, final_noisy)
-
-    # 3. Save & Plot
-    results = [
-        {"Component": "Concept View (SC)", "Shift": shift_sc, "Type": "Input View"},
-        {"Component": "Exercise View (SE)", "Shift": shift_se, "Type": "Input View"},
-        {"Component": "Fused Representation", "Shift": shift_final, "Type": "Output"},
-    ]
-    df = pd.DataFrame(results)
-    df.to_csv(os.path.join(args.out_dir, "multilevel_sensitivity.csv"), index=False)
-    
-    print("\n[Exp-3D Results] Relative Shift under Noise:")
-    print(df)
-
-    plt.figure(figsize=(6, 5))
-    # Colors: Unstable (orange), Stable (blue), Final (green)
-    colors = ['tab:orange', 'tab:blue', 'tab:green']
-    bars = plt.bar(df["Component"], df["Shift"], color=colors, width=0.6)
-    
-    plt.ylabel(f"Relative Shift under Noise (Dropout={dropout_rate})")
-    plt.title("Stability Filter Mechanism Analysis")
-    plt.grid(axis='y', linestyle='--', alpha=0.5)
-    
-    # Add value labels
-    for bar in bars:
-        yval = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width()/2, yval + 0.005, f"{yval:.4f}", ha='center', va='bottom')
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(args.out_dir, "multilevel_sensitivity.png"), dpi=220)
-    plt.close()
-
 
 # -----------------------------
 # Main & Args
@@ -490,16 +400,23 @@ def exp_multilevel_sensitivity(args, df_pareto, train_df, num_students, num_exer
 def get_args():
     root = os.path.dirname(os.path.abspath(__file__))
     p = argparse.ArgumentParser()
-    p.add_argument("--train_file", type=str, default=os.path.join(root, "assist_09", "train.csv"))
-    p.add_argument("--valid_file", type=str, default=os.path.join(root, "assist_09", "valid.csv"))
-    p.add_argument("--test_file", type=str, default=os.path.join(root, "assist_09", "test.csv"))
-    p.add_argument("--graph_dir", type=str, default=os.path.join(root, "graphs"))
-    p.add_argument("--out_dir", type=str, default=os.path.join(root, "exp_m2_out"))
+    
+    # Dataset selection (NEW)
+    p.add_argument("--dataset", type=str, default="assist_09",
+                   choices=["assist_09", "assist_17", "junyi"],
+                   help="选择数据集：assist_09, assist_17, junyi")
+    
+    # Paths (will be overridden based on dataset)
+    p.add_argument("--train_file", type=str, default=None)
+    p.add_argument("--valid_file", type=str, default=None)
+    p.add_argument("--test_file", type=str, default=None)
+    p.add_argument("--graph_dir", type=str, default=None)
+    p.add_argument("--out_dir", type=str, default=None)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", type=str, default="cuda:0")
     
     # Model Args
-    p.add_argument("--model_path", type=str, default=os.path.join(root, "saved_models", "best_model.pth"))
+    p.add_argument("--model_path", type=str, default=None)
     p.add_argument("--embedding_dim", type=int, default=256)
     p.add_argument("--num_layers", type=int, default=3)
     p.add_argument("--fusion_type", type=str, default="enhanced_gated")
@@ -510,14 +427,14 @@ def get_args():
     p.add_argument("--ortho_weight", type=float, default=0.5)
     p.add_argument("--dropout", type=float, default=0.3)
     
-    # Training Args (RESTORED MISSING ARGS HERE)
+    # Training Args
     p.add_argument("--batch_size", type=int, default=1024)
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--weight_decay", type=float, default=1e-5)
     p.add_argument("--patience", type=int, default=7)
     
-    # Missing params that caused AttributeError
+    # Training schedule params
     p.add_argument("--fusion_warmup_epochs", type=int, default=1)
     p.add_argument("--contrastive_decay_epochs", type=int, default=18)
     p.add_argument("--contrastive_min_weight", type=float, default=0.12)
@@ -533,10 +450,35 @@ def get_args():
     p.add_argument("--skip_pareto_training", action="store_true")
     p.add_argument("--gpus", type=str, default="0,1,2,3")
     p.add_argument("--pareto_serial", action="store_true")
-    p.add_argument("--gain_lambda0", type=float, default=0.0) # Kept for compat
+    p.add_argument("--gain_lambda0", type=float, default=0.0)
     p.add_argument("--gain_lambda_star", type=float, default=None)
 
-    return p.parse_args()
+    args = p.parse_args()
+    
+    # Auto-configure paths based on dataset
+    dataset = args.dataset
+    data_dir = os.path.join(root, "data", dataset)
+    
+    if args.train_file is None:
+        args.train_file = os.path.join(data_dir, "train.csv")
+    if args.valid_file is None:
+        args.valid_file = os.path.join(data_dir, "valid.csv")
+    if args.test_file is None:
+        args.test_file = os.path.join(data_dir, "test.csv")
+    if args.graph_dir is None:
+        args.graph_dir = os.path.join(root, "graphs", dataset)
+    if args.out_dir is None:
+        args.out_dir = os.path.join(root, "exp_m2_out", dataset)
+    if args.model_path is None:
+        # Try dataset-specific model first, then fallback to default
+        model_path_dataset = os.path.join(root, "saved_models", dataset, "best_model.pth")
+        model_path_default = os.path.join(root, "saved_models", "best_model.pth")
+        if os.path.exists(model_path_dataset):
+            args.model_path = model_path_dataset
+        else:
+            args.model_path = model_path_default
+    
+    return args
 
 
 def main():
@@ -562,14 +504,13 @@ def main():
     # 这步是必须的，因为它负责准备 model_lambda_*.pth 文件供 Exp-3D 使用
     df_pareto = exp_pareto_with_cache(args, train_df, valid_df, test_df, num_students, num_exercises, num_concepts, device)
 
-    # 3. [NEW] Exp-3D: Multi-level Sensitivity
-    exp_multilevel_sensitivity(args, df_pareto, train_df, num_students, num_exercises, num_concepts, device)
+
 
     # Summary
     summary = {
         "status": "Success", 
         "out_dir": args.out_dir,
-        "experiments": ["Robustness Curve", "Pareto (Model Prep)", "Multilevel Sensitivity"]
+        "experiments": ["Robustness Curve", "Pareto (Model Prep)"]
     }
     with open(os.path.join(args.out_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)

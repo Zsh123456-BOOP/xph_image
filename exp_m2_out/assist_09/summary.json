@@ -1,0 +1,8 @@
+{
+  "status": "Success",
+  "out_dir": "/home/zsh/xph_image/exp_m2_out/assist_09",
+  "experiments": [
+    "Robustness Curve",
+    "Pareto (Model Prep)"
+  ]
+}
