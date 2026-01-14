@@ -1,0 +1,16 @@
+{
+  "leakage_thr": 0.15,
+  "specialist_max_leakage": 2,
+  "n_valid_concepts": 27,
+  "leakage_mean": 18.0,
+  "leakage_median": 20.0,
+  "n_specialists_plotted": 5,
+  "specialist_dims": [
+    24,
+    23,
+    19,
+    4,
+    28
+  ],
+  "note": "Top specialists extracted."
+}

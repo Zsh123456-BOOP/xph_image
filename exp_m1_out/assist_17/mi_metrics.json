@@ -1,0 +1,7 @@
+{
+  "MI_mean": 0.07507383303848067,
+  "MI_median": 0.07347827503984715,
+  "NMI_mean": 0.03013926578878394,
+  "IndependenceScore": 0.9698607342112161,
+  "note": "Clean version: MI matrix + pairs data."
+}

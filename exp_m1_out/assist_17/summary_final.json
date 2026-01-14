@@ -1,0 +1,25 @@
+{
+  "Exp-1A_MI": {
+    "MI_mean": 0.07507383303848067,
+    "MI_median": 0.07347827503984715,
+    "NMI_mean": 0.03013926578878394,
+    "IndependenceScore": 0.9698607342112161,
+    "note": "Clean version: MI matrix + pairs data."
+  },
+  "Exp-1B_Alignment": {
+    "leakage_thr": 0.15,
+    "specialist_max_leakage": 2,
+    "n_valid_concepts": 42,
+    "leakage_mean": 13.166666666666666,
+    "leakage_median": 6.0,
+    "n_specialists_plotted": 5,
+    "specialist_dims": [
+      28,
+      66,
+      67,
+      50,
+      83
+    ],
+    "note": "Top specialists extracted."
+  }
+}

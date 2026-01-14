@@ -1,0 +1,8 @@
+lambda_contrastive,test_auc,D_view_mean,model_path
+0.0,0.798330725909083,0.990913987159729,/home/zsh/xph_image/exp_m2_out/assist_17/model_lambda_0.0000.pth
+0.05,0.8004561085394297,0.9983097910881042,/home/zsh/xph_image/exp_m2_out/assist_17/model_lambda_0.0500.pth
+0.1,0.7992392059286937,0.9996354579925537,/home/zsh/xph_image/exp_m2_out/assist_17/model_lambda_0.1000.pth
+0.2,0.7998247671099152,0.9845176935195923,/home/zsh/xph_image/exp_m2_out/assist_17/model_lambda_0.2000.pth
+0.4,0.8001537630384786,0.9360048770904541,/home/zsh/xph_image/exp_m2_out/assist_17/model_lambda_0.4000.pth
+0.8,0.7989908860953299,0.835939884185791,/home/zsh/xph_image/exp_m2_out/assist_17/model_lambda_0.8000.pth
+1.2,0.7984995305007557,0.8146398961544037,/home/zsh/xph_image/exp_m2_out/assist_17/model_lambda_1.2000.pth

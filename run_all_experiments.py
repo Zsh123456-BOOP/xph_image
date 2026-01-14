@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-主控制脚本: 运行所有实验模块
+主控制脚本: 运行所有实验模块 (支持自动训练)
 ================================================================================
 用法:
-    # 运行所有数据集的所有实验
+    # 运行所有数据集的所有实验（自动训练缺失模型）
     python run_all_experiments.py
 
     # 只运行特定数据集
@@ -12,6 +12,9 @@
 
     # 只运行特定实验模块
     python run_all_experiments.py --modules 1,2
+
+    # 跳过自动训练（只运行已有模型的实验）
+    python run_all_experiments.py --skip_train
 
     # 组合使用
     python run_all_experiments.py --datasets assist_17 --modules 3 --device cuda:1
@@ -22,7 +25,7 @@ import os
 import sys
 import argparse
 import subprocess
-from typing import List
+from typing import List, Tuple
 
 
 # 可用数据集
@@ -51,6 +54,12 @@ def get_args():
     p.add_argument("--gpus", type=str, default="0,1,2,3",
                    help="Pareto 实验使用的 GPU 列表（仅 Module-2）。默认: 0,1,2,3")
     
+    p.add_argument("--skip_train", action="store_true",
+                   help="跳过自动训练，只运行已有模型的数据集")
+    
+    p.add_argument("--epochs", type=int, default=100,
+                   help="训练 epochs（仅当需要训练时）。默认: 100")
+    
     p.add_argument("--dry_run", action="store_true",
                    help="只打印要执行的命令，不实际运行")
     
@@ -73,6 +82,66 @@ def parse_modules(s: str) -> List[int]:
     return modules
 
 
+def get_model_path(root: str, dataset: str) -> Tuple[str, bool]:
+    """返回模型路径和是否存在"""
+    model_path = os.path.join(root, "saved_models", dataset, "best_model.pth")
+    if os.path.exists(model_path):
+        return model_path, True
+    # 兼容旧结构
+    model_path_alt = os.path.join(root, "saved_models", "best_model.pth")
+    if os.path.exists(model_path_alt) and dataset == "assist_09":
+        return model_path_alt, True
+    return model_path, False
+
+
+def train_model(dataset: str, device: str, epochs: int, dry_run: bool, root: str) -> bool:
+    """训练模型"""
+    data_dir = os.path.join(root, "data", dataset)
+    save_dir = os.path.join(root, "saved_models", dataset)
+    graph_dir = os.path.join(root, "graphs", dataset)
+    
+    # 检查数据集是否存在
+    train_file = os.path.join(data_dir, "train.csv")
+    if not os.path.exists(train_file):
+        print(f"[ERROR] 训练数据不存在: {train_file}")
+        return False
+    
+    cmd = [
+        sys.executable,
+        os.path.join(root, "main.py"),
+        "--train_file", os.path.join(data_dir, "train.csv"),
+        "--valid_file", os.path.join(data_dir, "valid.csv"),
+        "--test_file", os.path.join(data_dir, "test.csv"),
+        "--graph_dir", graph_dir,
+        "--save_dir", save_dir,
+        "--device", device,
+        "--epochs", str(epochs),
+    ]
+    
+    print(f"\n{'='*60}")
+    print(f"[TRAIN] 训练模型 | Dataset: {dataset}")
+    print(f"[CMD] {' '.join(cmd)}")
+    print(f"{'='*60}")
+    
+    if dry_run:
+        print("[DRY RUN] 跳过实际训练")
+        return True
+    
+    # 创建保存目录
+    os.makedirs(save_dir, exist_ok=True)
+    os.makedirs(graph_dir, exist_ok=True)
+    
+    try:
+        result = subprocess.run(cmd, check=True, cwd=root)
+        return result.returncode == 0
+    except subprocess.CalledProcessError as e:
+        print(f"[ERROR] 训练失败: {e}")
+        return False
+    except Exception as e:
+        print(f"[ERROR] 意外错误: {e}")
+        return False
+
+
 def run_experiment(script: str, dataset: str, device: str, gpus: str, dry_run: bool, root: str) -> bool:
     """运行单个实验脚本"""
     data_dir = os.path.join(root, "data", dataset)
@@ -83,15 +152,10 @@ def run_experiment(script: str, dataset: str, device: str, gpus: str, dry_run: b
         return False
     
     # 检查模型是否存在
-    model_path = os.path.join(root, "saved_models", dataset, "best_model.pth")
-    if not os.path.exists(model_path):
-        # 兼容旧结构：尝试默认路径
-        model_path_alt = os.path.join(root, "saved_models", "best_model.pth")
-        if os.path.exists(model_path_alt) and dataset == "assist_09":
-            model_path = model_path_alt
-        else:
-            print(f"[WARN] 模型不存在: {model_path}，跳过。请先训练模型。")
-            return False
+    model_path, exists = get_model_path(root, dataset)
+    if not exists:
+        print(f"[ERROR] 模型不存在: {model_path}，无法运行实验。")
+        return False
     
     # 构建命令
     cmd = [
@@ -139,7 +203,35 @@ def main():
     print(f"模块: {[f'Module-{m}: {EXPERIMENT_MODULES[m][1]}' for m in modules]}")
     print(f"设备: {args.device}")
     print(f"GPUs (Module-2): {args.gpus}")
+    print(f"自动训练: {'关闭' if args.skip_train else '开启'}")
     print(f"Dry Run: {args.dry_run}")
+    print("="*60)
+    
+    # ========================================
+    # Phase 1: 检查并训练缺失的模型
+    # ========================================
+    if not args.skip_train:
+        print("\n" + "="*60)
+        print("Phase 1: 检查模型状态")
+        print("="*60)
+        
+        for dataset in datasets:
+            model_path, exists = get_model_path(root, dataset)
+            if exists:
+                print(f"  [✓] {dataset}: 模型已存在 ({model_path})")
+            else:
+                print(f"  [✗] {dataset}: 模型不存在，将开始训练...")
+                success = train_model(dataset, args.device, args.epochs, args.dry_run, root)
+                if success:
+                    print(f"  [✓] {dataset}: 训练完成")
+                else:
+                    print(f"  [✗] {dataset}: 训练失败")
+    
+    # ========================================
+    # Phase 2: 运行实验
+    # ========================================
+    print("\n" + "="*60)
+    print("Phase 2: 运行实验")
     print("="*60)
     
     results = []
