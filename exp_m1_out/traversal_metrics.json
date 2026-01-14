@@ -1,0 +1,19 @@
+{
+  "student_u": 2291,
+  "concept_k": 102,
+  "steps": 21,
+  "t_low": -6.187000000000001,
+  "t_high": 2.3,
+  "base_ks_k": 0.17109960317611694,
+  "ks_k_at_low": 0.005086461082100868,
+  "ks_k_at_high": 0.4474388062953949,
+  "A_spearman_mean": 0.0,
+  "A_spearman_pos_rate": 0.0,
+  "C_std_mean": 0.010690804501052753,
+  "A_range_mean": 0.0,
+  "C_range_mean": 0.035680982032014676,
+  "EffectRatio(A_range/C_range)": 0.0,
+  "leakage_mean_all_dims": 0.06148787960410118,
+  "leakage_mean_other_dims": 0.08529514819383621,
+  "note": "Good: A monotonic↑ (high spearman, pos_rate), C stable (low std/range), effect_ratio>>1, low leakage."
+}

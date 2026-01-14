@@ -12,8 +12,10 @@ from sklearn.metrics import roc_auc_score, precision_score, recall_score, f1_sco
 
 def build_graph(data_df, num_students, num_items, correct=True, item_type='exercise', concept_offset=0,
                 graph_dir='./graphs'):
-    # 构建图的文件名，包含数据集特征以避免混淆
-    # 添加 num_students 和 num_items 来区分不同数据集
+    """
+    构建学生-习题/概念二分图的归一化邻接矩阵。
+    优化：使用纯稀疏归一化，避免 adj.toarray() 导致的内存爆炸。
+    """
     graph_filename = f"graph_{item_type}_{correct}_s{num_students}_i{num_items}.pkl"
     graph_path = os.path.join(graph_dir, graph_filename)
 
@@ -21,14 +23,17 @@ def build_graph(data_df, num_students, num_items, correct=True, item_type='exerc
     if os.path.exists(graph_path):
         print(f"Loading pre-built graph from {graph_path}...")
         with open(graph_path, 'rb') as f:
-            adj_matrix = pickle.load(f)
-        # 如果加载的是coo_matrix，需要转换为PyTorch稀疏张量
-        if isinstance(adj_matrix, coo_matrix):
-            indices = torch.LongTensor(np.vstack([adj_matrix.row, adj_matrix.col]))
-            values = torch.FloatTensor(adj_matrix.data)
-            shape = torch.Size(adj_matrix.shape)
-            return torch.sparse.FloatTensor(indices, values, shape)
-        return adj_matrix
+            adj_data = pickle.load(f)
+        # 支持新格式 (indices, values, shape) 或旧格式 coo_matrix
+        if isinstance(adj_data, tuple) and len(adj_data) == 3:
+            indices, values, shape = adj_data
+            return torch.sparse_coo_tensor(indices, values, shape).coalesce()
+        elif isinstance(adj_data, coo_matrix):
+            indices = torch.LongTensor(np.vstack([adj_data.row, adj_data.col]))
+            values = torch.FloatTensor(adj_data.data)
+            shape = torch.Size(adj_data.shape)
+            return torch.sparse_coo_tensor(indices, values, shape).coalesce()
+        return adj_data
 
     print(f"Graph not found, building graph...")
     print(f"  Dataset: {num_students} students, {num_items} items, type={item_type}, correct={correct}")
@@ -43,17 +48,10 @@ def build_graph(data_df, num_students, num_items, correct=True, item_type='exerc
             rows.append(stu_id)
             cols.append(exer_id)
     else:
-        # 构建学生-概念图
-        # 优化说明：
-        # 之前的设计使用 concept_offset = num_exercises 来区分习题和知识点的索引空间
-        # 但实际上习题GCN和知识点GCN是完全独立的，不需要区分
-        # 优化后：直接使用映射后的概念ID (0~num_concepts-1)，不加偏移
-        # 效果：大幅减少参数量（从17,799降到123个embedding，节省99.3%）
         for _, row in filtered_df.iterrows():
             stu_id = int(row['stu_id'])
             cpt_seq = row['cpt_seq']
             if isinstance(cpt_seq, str):
-                # 不加 concept_offset，直接使用映射后的概念ID
                 cpts = [int(c) for c in cpt_seq.split(',')]
             else:
                 cpts = [int(cpt_seq)]
@@ -61,11 +59,12 @@ def build_graph(data_df, num_students, num_items, correct=True, item_type='exerc
                 rows.append(stu_id)
                 cols.append(cpt_id)
 
-    data = np.ones(len(rows))
-    rows_np = np.array(rows)
-    cols_np = np.array(cols)
-    interaction_matrix = coo_matrix((data, (rows_np, cols_np)), shape=(num_students, num_items))
+    data = np.ones(len(rows), dtype=np.float32)
+    rows_np = np.array(rows, dtype=np.int64)
+    cols_np = np.array(cols, dtype=np.int64)
 
+    # 构建二分图邻接矩阵索引
+    n_total = num_students + num_items
     row_stu_item = rows_np
     col_stu_item = cols_np + num_students
     row_item_stu = cols_np + num_students
@@ -75,25 +74,31 @@ def build_graph(data_df, num_students, num_items, correct=True, item_type='exerc
     adj_cols = np.concatenate([col_stu_item, col_item_stu])
     adj_data = np.concatenate([data, data])
 
-    adj = coo_matrix((adj_data, (adj_rows, adj_cols)), shape=(num_students + num_items, num_students + num_items))
-    rowsum = np.array(adj.sum(1)).flatten()
+    # === 纯稀疏归一化：D^{-1/2} A D^{-1/2} ===
+    adj_coo = coo_matrix((adj_data, (adj_rows, adj_cols)), shape=(n_total, n_total))
+    
+    # 计算度数（稀疏 sum）
+    rowsum = np.array(adj_coo.sum(axis=1)).flatten()
     epsilon = 1e-12
     d_inv_sqrt = np.power(rowsum + epsilon, -0.5)
-    d_inv_sqrt[np.isinf(d_inv_sqrt)] = 0.
-    d_mat_inv_sqrt = np.diag(d_inv_sqrt)
-    norm_adj = d_mat_inv_sqrt @ adj.toarray() @ d_mat_inv_sqrt
-    norm_adj = coo_matrix(norm_adj)
-
-    # 保存图
-    os.makedirs(graph_dir, exist_ok=True)  # 创建保存目录
+    d_inv_sqrt[np.isinf(d_inv_sqrt)] = 0.0
+    
+    # 对 COO values 做归一化：val * d_inv_sqrt[row] * d_inv_sqrt[col]
+    norm_values = adj_coo.data * d_inv_sqrt[adj_coo.row] * d_inv_sqrt[adj_coo.col]
+    
+    # 构造归一化后的稀疏张量
+    indices = torch.LongTensor(np.vstack([adj_coo.row, adj_coo.col]))
+    values = torch.FloatTensor(norm_values)
+    shape = torch.Size([n_total, n_total])
+    
+    # 保存为新格式 (indices, values, shape)
+    os.makedirs(graph_dir, exist_ok=True)
     with open(graph_path, 'wb') as f:
-        pickle.dump(norm_adj, f)
+        pickle.dump((indices, values, shape), f)
     print(f"Graph saved to {graph_path}")
 
-    indices = torch.LongTensor(np.vstack([norm_adj.row, norm_adj.col]))
-    values = torch.FloatTensor(norm_adj.data)
-    shape = torch.Size(norm_adj.shape)
-    return torch.sparse.FloatTensor(indices, values, shape)
+    return torch.sparse_coo_tensor(indices, values, shape).coalesce()
+
 
 class EarlyStopping:
     def __init__(self, patience=10, verbose=False, delta=0):
@@ -128,63 +133,92 @@ class EarlyStopping:
         self.best_model_state = copy.deepcopy(model.state_dict())
         self.val_auc_min = val_auc
 
+
 def train_epoch(model, train_loader, optimizer, device, adj_correct_se, adj_wrong_se, adj_correct_sc, adj_wrong_sc, args, epoch, verbose=True):
+    """
+    训练一个 epoch。
+    保持原始训练语义：每 batch 计算 GCN + Fusion 并参与梯度更新。
+    优化：使用 collate_fn 预处理的 padded tensor。
+    """
     model.train()
     total_loss = 0
     total_aux_losses = {'fusion_se': 0, 'fusion_sc': 0, 'contrastive_exer': 0, 'contrastive_cpt': 0}
+    
     pbar = tqdm(train_loader, desc='Training', disable=not verbose)
-    for stu_ids, exer_ids, cpts_list, labels in pbar:
+    for batch in pbar:
+        # 新版 collate_fn 返回 5 元素：(stu_ids, exer_ids, cpt_ids_padded, cpt_mask, labels)
+        stu_ids, exer_ids, cpt_ids_padded, cpt_mask, labels = batch
         stu_ids = stu_ids.to(device)
         exer_ids = exer_ids.to(device)
+        cpt_ids_padded = cpt_ids_padded.to(device)
+        cpt_mask = cpt_mask.to(device)
         labels = labels.to(device)
-        cpts_tensors = [torch.LongTensor(cpts).to(device) for cpts in cpts_list]
+        
         optimizer.zero_grad()
+        
+        # 原始训练逻辑：每 batch 调用 forward，GCN + Fusion 参与梯度更新
         predictions, aux_losses, _ = model(
-            stu_ids, exer_ids, cpts_tensors, labels,
+            stu_ids, exer_ids, cpt_ids_padded, cpt_mask, labels,
             adj_correct_se, adj_wrong_se, adj_correct_sc, adj_wrong_sc
         )
+        
         main_loss = F.binary_cross_entropy(predictions, labels)
         fusion_weight = args.lambda_fusion * min(1.0, epoch / args.fusion_warmup_epochs)
         contrastive_weight = args.lambda_contrastive * max(args.contrastive_min_weight, 1.0 - epoch / args.contrastive_decay_epochs)
         aux_loss = (fusion_weight * (aux_losses['fusion_se'] + aux_losses['fusion_sc']) +
                     contrastive_weight * (aux_losses['contrastive_exer'] + aux_losses['contrastive_cpt']))
         loss = main_loss + aux_loss
+        
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clip)
         optimizer.step()
+        
         total_loss += loss.item()
         for key in total_aux_losses:
             total_aux_losses[key] += aux_losses[key].item()
         pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+    
     avg_loss = total_loss / len(train_loader)
     avg_aux_losses = {k: v / len(train_loader) for k, v in total_aux_losses.items()}
     return avg_loss, avg_aux_losses
 
+
 def evaluate(model, data_loader, device, adj_correct_se, adj_wrong_se, adj_correct_sc, adj_wrong_sc):
+    """
+    评估模型。
+    保持原始逻辑。
+    """
     model.eval()
     total_loss = 0
     all_predictions = []
     all_labels = []
     all_knowledge_states = []
+    
     with torch.no_grad():
-        for stu_ids, exer_ids, cpts_list, labels in data_loader:
+        for batch in data_loader:
+            stu_ids, exer_ids, cpt_ids_padded, cpt_mask, labels = batch
             stu_ids = stu_ids.to(device)
             exer_ids = exer_ids.to(device)
+            cpt_ids_padded = cpt_ids_padded.to(device)
+            cpt_mask = cpt_mask.to(device)
             labels = labels.to(device)
-            cpts_tensors = [torch.LongTensor(cpts).to(device) for cpts in cpts_list]
+            
             predictions, aux_losses, knowledge_states = model(
-                stu_ids, exer_ids, cpts_tensors, labels,
+                stu_ids, exer_ids, cpt_ids_padded, cpt_mask, labels,
                 adj_correct_se, adj_wrong_se, adj_correct_sc, adj_wrong_sc
             )
+            
             loss = F.binary_cross_entropy(predictions, labels)
             total_loss += loss.item()
             all_predictions.extend(predictions.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
             all_knowledge_states.extend(knowledge_states.cpu().numpy())
+    
     all_predictions = np.array(all_predictions)
     all_labels = np.array(all_labels)
     pred_labels = (all_predictions >= 0.5).astype(int)
     accuracy = (pred_labels == all_labels).mean()
+    
     try:
         auc = roc_auc_score(all_labels, all_predictions)
         precision = precision_score(all_labels, pred_labels, zero_division=0)
@@ -193,11 +227,11 @@ def evaluate(model, data_loader, device, adj_correct_se, adj_wrong_se, adj_corre
         RMSE = np.sqrt(mean_squared_error(all_labels, all_predictions))
         conf_matrix = confusion_matrix(all_labels, pred_labels)
     except Exception as e:
-        # 修复：捕获具体异常并打印警告信息
         print(f"Warning: Error computing metrics: {e}")
         print("Using default values. This may happen with very small batches or imbalanced data.")
         auc = 0.5; precision = 0.5; recall = 0.5; f1 = 0.5; RMSE = 0.5
         conf_matrix = np.array([[0, 0], [0, 0]])
+    
     avg_loss = total_loss / len(data_loader)
     metrics = {
         'accuracy': accuracy, 'auc': auc, 'precision': precision, 'recall': recall,

@@ -33,6 +33,38 @@ class CDDataset(Dataset):
         label = int(row['label'])
         return stu_id, exer_id, cpts, label
 
+
 def collate_fn(batch):
+    """
+    优化后的 collate_fn：在此处完成 padding，避免在 model.forward 中使用 Python 循环
+    
+    Returns:
+        stu_ids: LongTensor [B]
+        exer_ids: LongTensor [B]
+        cpt_ids_padded: LongTensor [B, L] - L 为 batch 内最大概念数
+        cpt_mask: BoolTensor [B, L] - True 表示有效位置，False 表示 padding
+        labels: FloatTensor [B]
+    """
     stu_ids, exer_ids, cpts_list, labels = zip(*batch)
-    return torch.LongTensor(stu_ids), torch.LongTensor(exer_ids), list(cpts_list), torch.FloatTensor(labels)
+    
+    # 计算 batch 内最大概念数量
+    max_len = max(len(cpts) for cpts in cpts_list)
+    batch_size = len(cpts_list)
+    
+    # 预分配张量（避免循环中创建）
+    cpt_ids_padded = torch.zeros(batch_size, max_len, dtype=torch.long)
+    cpt_mask = torch.zeros(batch_size, max_len, dtype=torch.bool)
+    
+    # 填充
+    for i, cpts in enumerate(cpts_list):
+        length = len(cpts)
+        cpt_ids_padded[i, :length] = torch.LongTensor(cpts)
+        cpt_mask[i, :length] = True
+    
+    return (
+        torch.LongTensor(stu_ids),
+        torch.LongTensor(exer_ids),
+        cpt_ids_padded,
+        cpt_mask,
+        torch.FloatTensor(labels)
+    )

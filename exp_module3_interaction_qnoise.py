@@ -1,20 +1,74 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Module-3 Experiments (No item name/text required):
-  Exp-3A: Q-noise robustness at inference time (corrupt cpt_seq list, keep labels unchanged)
-          - Missing (drop true concepts)
-          - False (add random concepts)
-  Exp-3B: Sensitivity score per exercise (SDI-like): average |p(full)-p(mask-one)| across students/concepts
-          -> correlate with concept-count
-  Exp-3C: Co-attention heatmap for a selected multi-concept exercise
-          (use diagnosis_head attention scores proxy: cpt_emb dot stu_emb)
+Module-3 Experiments: 交互建模实验 (Interaction Modeling)
+================================================================================
 
-Outputs (out_dir):
-  - qnoise_curve.csv, qnoise_curve.png
-  - sensitivity_scatter.png, sensitivity_table.csv
-  - coattention_heatmap.png (for selected exercise)
+实验目的: 验证模型对学生-题目-概念交互的建模能力，以及对 Q-matrix 噪声的鲁棒性
+
+实验列表:
+--------------------------------------------------------------------------------
+Exp-3A: Q-noise 鲁棒性 (Q-noise Robustness)
+        测试模型在推理时对概念标签噪声的鲁棒性
+        - missing: 随机丢弃正确概念
+        - false: 随机添加错误概念
+        
+        输出文件: qnoise_curve.png, qnoise_curve.csv
+        
+        如何判断结果好坏:
+        ✓ 好: rho=0.4 时 AUC 下降 < 1%
+              两条曲线都接近水平，说明模型不依赖精确的 Q-matrix
+        △ 中: rho=0.4 时 AUC 下降 1-3%
+              模型有一定鲁棒性
+        ✗ 差: rho=0.4 时 AUC 下降 > 5%
+              模型过度依赖概念标签，对 Q-matrix 错误敏感
+        
+        图像解读: qnoise_curve.png 中
+                  - 两条曲线越平越好
+                  - missing 曲线应该高于 false（丢概念比加错概念危害小）
+                  - 如果 false 曲线下降很快，说明模型对虚假概念敏感
+
+--------------------------------------------------------------------------------
+Exp-3B: 敏感度分析 (Sensitivity Analysis / SDI-like)
+        计算单个概念对预测的影响程度: mean|p(full) - p(mask-one)|
+        
+        输出文件: sensitivity_scatter.png, sensitivity_table.csv, sensitivity_metrics.json
+        
+        如何判断结果好坏:
+        ✓ 好: Spearman(concept_count, sensitivity) > 0.3
+              多概念题的敏感度更高（合理，因为每个概念贡献权重更分散）
+        △ 中: Spearman 接近 0
+              概念数量与敏感度无明显相关（模型可能使用了均匀注意力）
+        ✗ 差: Spearman < -0.3
+              概念数量越多敏感度反而越低（不合理）
+        
+        图像解读: sensitivity_scatter.png 散点图
+                  - 如果有正相关，点应该从左下到右上分布
+                  - 如果呈水平分布，说明无相关性
+                  - 敏感度范围 0.0-0.5 是正常的
+
+--------------------------------------------------------------------------------
+Exp-3C: 共注意力热力图 (Co-attention Heatmap)
+        可视化一个多概念题目的注意力分布
+        
+        输出文件: coattention_heatmap.png, coattention_matrix.csv, coattention_meta.json
+        
+        如何判断结果好坏:
+        ✓ 好: 热力图呈分布式（多个格子有中等亮度）
+              说明模型综合考虑了多个概念
+        △ 中: 热力图有一个主要亮点但其他格子也有信号
+              模型有主次之分但不是完全忽略其他概念
+        ✗ 差: 热力图只有一个极亮点（其他接近0）
+              说明注意力过度集中在单个概念，没有真正建模多概念交互
+        
+        图像解读: coattention_heatmap.png 中
+                  - 最好的情况是对角线上有多个亮色块
+                  - 如果只有单点极亮（其他全黑），说明注意力坍塌
+                  - 可以查看 coattention_meta.json 中的 avg_attention 数值
+
+汇总输出: summary.json
 """
+
 
 import os
 import json
@@ -154,6 +208,31 @@ def apply_q_noise(df: pd.DataFrame, mode: str, rho: float, num_concepts: int, se
 # Exp-3A: Q-noise robustness (inference-time)
 # -----------------------------
 def exp_qnoise_curve(args, model, graphs, test_df, device):
+    """
+    测试模型对概念标签噪声的鲁棒性
+    
+    输出文件:
+      - qnoise_curve.csv: 不同噪声率下的 AUC/Acc/RMSE
+      - qnoise_curve.png: 折线图
+    
+    R 绘图代码示例:
+    ```R
+    library(ggplot2)
+    
+    # 读取数据
+    df <- read.csv("qnoise_curve.csv")
+    
+    # 绘制折线图
+    ggplot(df, aes(x=rho, y=auc, color=mode, group=mode)) +
+      geom_line(linewidth=1) +
+      geom_point(size=3) +
+      scale_color_manual(values=c("missing"="#1f77b4", "false"="#ff7f0e")) +
+      labs(title="Q-noise Robustness",
+           x="Q-noise rate (rho)", y="Test AUC", color="Mode") +
+      theme_minimal()
+    ggsave("qnoise_curve_r.png", width=7, height=5, dpi=300)
+    ```
+    """
     rows = []
     for mode in ["missing", "false"]:
         for rho in args.qnoise_rates:
@@ -206,6 +285,35 @@ def precompute_embeddings(model: CognitiveDiagnosisModel, graphs):
 
 
 def exp_sensitivity(args, model, graphs, test_df, device):
+    """
+    计算单个概念对预测的敏感度（SDI-like）
+    
+    输出文件:
+      - sensitivity_table.csv: 每个题目的敏感度、概念数量、难度
+      - sensitivity_scatter.png: 散点图
+      - sensitivity_metrics.json: Spearman相关系数
+    
+    R 绘图代码示例:
+    ```R
+    library(ggplot2)
+    
+    # 读取数据
+    df <- read.csv("sensitivity_table.csv")
+    
+    # 绘制散点图
+    ggplot(df, aes(x=concept_count, y=sensitivity)) +
+      geom_point(alpha=0.6, color="steelblue") +
+      geom_smooth(method="lm", se=TRUE, color="coral") +
+      labs(title="Sensitivity vs Concept Count",
+           x="Concept Count |K_q|", 
+           y="Sensitivity (mean |p(full)-p(mask-one)|)") +
+      theme_minimal()
+    ggsave("sensitivity_scatter_r.png", width=7, height=5, dpi=300)
+    
+    # 查看 Spearman 相关性
+    cor.test(df$concept_count, df$sensitivity, method="spearman")
+    ```
+    """
     rng = np.random.default_rng(args.seed)
     m = exercise_concept_map(test_df)
 
@@ -285,6 +393,35 @@ def exp_sensitivity(args, model, graphs, test_df, device):
 # -----------------------------
 @torch.no_grad()
 def exp_coattention_heatmap(args, model, graphs, test_df, device):
+    """
+    可视化多概念题目的共注意力热力图
+    
+    输出文件:
+      - coattention_matrix.csv: L×L 共注意力矩阵
+      - coattention_heatmap.png: 热力图
+      - coattention_meta.json: 元数据（题目ID、概念列表、平均注意力）
+    
+    R 绘图代码示例:
+    ```R
+    library(ggplot2)
+    library(reshape2)
+    
+    # 读取数据
+    M <- as.matrix(read.csv("coattention_matrix.csv", row.names=1))
+    df <- melt(M)
+    colnames(df) <- c("Concept_i", "Concept_j", "Attention")
+    
+    # 绘制热力图
+    ggplot(df, aes(x=Concept_j, y=Concept_i, fill=Attention)) +
+      geom_tile() +
+      scale_fill_viridis_c() +
+      labs(title="Co-attention Heatmap",
+           x="Concept Index", y="Concept Index") +
+      theme_minimal() +
+      coord_fixed()
+    ggsave("coattention_heatmap_r.png", width=6, height=5, dpi=300)
+    ```
+    """
     m = exercise_concept_map(test_df)
     # pick an exercise with >=3 concepts (more interpretable)
     cand = [q for q, cpts in m.items() if len(cpts) >= 3]
@@ -319,6 +456,12 @@ def exp_coattention_heatmap(args, model, graphs, test_df, device):
 
     # build a co-attention style matrix: outer(att, att)
     M = np.outer(att, att)
+
+    # 保存完整矩阵
+    df_matrix = pd.DataFrame(M, 
+                              index=[f"cpt_{c}" for c in cpts],
+                              columns=[f"cpt_{c}" for c in cpts])
+    df_matrix.to_csv(os.path.join(args.out_dir, "coattention_matrix.csv"))
 
     plt.figure(figsize=(6, 5))
     plt.imshow(M, aspect="auto")
