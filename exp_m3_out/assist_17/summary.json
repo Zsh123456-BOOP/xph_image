@@ -11,5 +11,20 @@
   "qnoise_rows": 10,
   "hard_rows": 5,
   "attr_rows": 0,
-  "note": "If mask_effective=False, Exp-3B/3C are skipped as model-head defect."
+  "note": "If mask_effective=False, Exp-3B/3C are skipped as model-head defect.",
+  "figs": {
+    "single_keep": [
+      "qnoise_curve.png",
+      "qnoise_hard_curve.png",
+      "attribution_violin.png",
+      "attribution_ridge.png",
+      "interaction_heatmap.png",
+      "interaction_network.png",
+      "interaction_heatmap_global.png"
+    ],
+    "combo_added": [
+      "fig_m3_qnoise_combo.png",
+      "fig_m3_interaction_global_combo.png"
+    ]
+  }
 }

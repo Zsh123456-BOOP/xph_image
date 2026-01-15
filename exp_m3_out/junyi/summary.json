@@ -1,19 +1,16 @@
 {
-  "out_dir": "/home/zsh/xph_image/exp_m3_out/assist_09",
-  "num_concepts": 123,
+  "out_dir": "/home/zsh/xph_image/exp_m3_out/junyi",
+  "num_concepts": 39,
   "mask_sanity": {
-    "ok": true,
-    "median_abs_delta_logit": 0.09118047955917175,
-    "mean_abs_delta_logit": 0.8233056140366394,
-    "n": 80,
-    "mask_effective": true
+    "ok": false,
+    "reason": "no exercise with >=2 concepts"
   },
-  "generated_attribution_and_interaction": true,
-  "focus_exercise_single": 8572,
+  "generated_attribution_and_interaction": false,
+  "focus_exercise_single": null,
   "generated_global_interaction": false,
   "qnoise_rows": 10,
   "hard_rows": 5,
-  "attr_rows": 197,
+  "attr_rows": 0,
   "note": "If mask_effective=False, Exp-3B/3C are skipped as model-head defect.",
   "figs": {
     "single_keep": [

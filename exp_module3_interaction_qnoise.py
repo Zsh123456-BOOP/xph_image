@@ -10,10 +10,21 @@ Module-3 Experiments: 交互建模实验 (Interaction Modeling)
 - Exp-3C: 概念交互可视化（Synergy Syn(i,j) heatmap + network）
   * 若单题概念数太小，则自动切换为 global interaction 聚合图
 
-注意：
+要求：
 - 不改模型结构，仅改实验脚本逻辑与可视化
 - 若 diagnosis_head 对 mask 生效，则归因/交互均有效；
-  若 mask 在 head 内被忽略，则 attribution 接近 0 —— 这是模型实现问题（自动跳过 3B/3C）。
+  若 mask 在 head 内被忽略，则 attribution 接近 0 —— 这是模型实现问题（自动跳过 3B/3C）
+
+本版增强（不删单图，额外新增组合主图）：
+- 保留全部单图：
+  qnoise_curve.png, qnoise_hard_curve.png,
+  attribution_violin.png, attribution_ridge.png,
+  interaction_heatmap.png, interaction_network.png,
+  interaction_heatmap_global.png
+- 新增“组合主图”（更适合放主文）：
+  fig_m3_qnoise_combo.png: (a) missing/false  (b) hard-false
+  fig_m3_interaction_global_combo.png: (a) global heatmap (sym) (b) top edges bar (pos/neg)
+- 统一四位小数显示与白底出版风格
 """
 
 import os
@@ -25,14 +36,54 @@ from typing import Dict, List, Tuple, Optional
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from matplotlib import cm
+from matplotlib.ticker import FormatStrFormatter
 
 from torch.utils.data import DataLoader
 
 from dataset import CDDataset, collate_fn
 from model import CognitiveDiagnosisModel
 from utils import build_graph, evaluate
+
+
+# -----------------------------
+# Plot style (white, publication)
+# -----------------------------
+def set_pub_style():
+    plt.rcParams.update({
+        "figure.facecolor": "white",
+        "axes.facecolor": "white",
+        "savefig.facecolor": "white",
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+        "axes.edgecolor": "#333333",
+        "axes.labelcolor": "#333333",
+        "xtick.color": "#333333",
+        "ytick.color": "#333333",
+        "text.color": "#333333",
+        "axes.linewidth": 1.0,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "grid.color": "#E0E0E0",
+        "grid.linestyle": "--",
+        "grid.linewidth": 0.8,
+        "legend.frameon": False,
+        "figure.dpi": 220,
+        "savefig.bbox": "tight",
+        "savefig.pad_inches": 0.08
+    })
+
+
+def savefig(path: str):
+    plt.tight_layout()
+    plt.savefig(path, dpi=300)
+    plt.close()
+
+
+def fmt4(x: float) -> str:
+    return f"{float(x):.4f}"
 
 
 # -----------------------------
@@ -45,15 +96,19 @@ def set_seed(seed: int):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
+
 def safe_mkdir(p: str):
     os.makedirs(p, exist_ok=True)
+
 
 def parse_list_floats(s: str) -> List[float]:
     return [float(x.strip()) for x in s.split(",") if x.strip()]
 
+
 def logit(p: float, eps: float = 1e-6) -> float:
     p = float(np.clip(p, eps, 1 - eps))
     return float(np.log(p / (1 - p)))
+
 
 def corr_spearman(x: np.ndarray, y: np.ndarray) -> float:
     if len(x) < 3:
@@ -61,6 +116,7 @@ def corr_spearman(x: np.ndarray, y: np.ndarray) -> float:
     rx = pd.Series(x).rank(method="average").to_numpy()
     ry = pd.Series(y).rank(method="average").to_numpy()
     return float(np.corrcoef(rx, ry)[0, 1])
+
 
 def write_full_excel(out_path: str, sheet_map: Dict[str, pd.DataFrame], meta: Dict):
     with pd.ExcelWriter(out_path, engine="openpyxl") as w:
@@ -183,7 +239,7 @@ def apply_q_noise(df: pd.DataFrame, mode: str, rho: float, num_concepts: int, se
 # Hard false noise
 # -----------------------------
 def build_hard_false_map(m: Dict[int, List[int]], cpt_emb: torch.Tensor, num_concepts: int, topk_pool: int = 50) -> Dict[int, List[int]]:
-    cpt_emb = torch.nn.functional.normalize(cpt_emb, dim=-1)
+    cpt_emb = F.normalize(cpt_emb, dim=-1)
     hard_map = {}
     for q, cpts in m.items():
         cpts_u = list(dict.fromkeys(cpts))
@@ -308,7 +364,7 @@ def quick_mask_sanity_check(args, model, test_df, device, stu_final, exer_final,
 # -----------------------------
 # Exp-3A: Q-noise robustness (curve)
 # -----------------------------
-def exp_qnoise_curve(args, model, graphs, test_df, device):
+def exp_qnoise_curve(args, model, graphs, test_df, device) -> pd.DataFrame:
     rows = []
     for mode in ["missing", "false"]:
         for rho in args.qnoise_rates:
@@ -325,28 +381,30 @@ def exp_qnoise_curve(args, model, graphs, test_df, device):
     df = pd.DataFrame(rows)
     df.to_csv(os.path.join(args.out_dir, "qnoise_curve.csv"), index=False)
 
-    # 更审稿人友好的画法：画 AUC，并设置 tight ylim，让变化可见
+    # 单图（保留）
     plt.figure(figsize=(7.0, 4.8))
+    ax = plt.gca()
     for mode in ["missing", "false"]:
         sub = df[df["mode"] == mode].sort_values("rho")
-        plt.plot(sub["rho"], sub["auc"], marker="o", label=mode)
-    plt.xlabel("Q-noise rate ρ")
-    plt.ylabel("Test AUC")
-    plt.title("Q-noise Robustness (inference-time cpt_seq corruption)")
+        ax.plot(sub["rho"], sub["auc"], marker="o", label=mode)
+    ax.set_xlabel("Q-noise rate ρ")
+    ax.set_ylabel("Test AUC")
+    ax.set_title("Q-noise Robustness (inference-time cpt_seq corruption)")
+    ax.grid(True, alpha=0.6)
+    ax.yaxis.set_major_formatter(FormatStrFormatter('%.4f'))
+
     ymin, ymax = df["auc"].min(), df["auc"].max()
     pad = max(1e-4, (ymax - ymin) * 0.25)
-    plt.ylim(ymin - pad, ymax + pad)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(args.out_dir, "qnoise_curve.png"), dpi=260)
-    plt.close()
+    ax.set_ylim(ymin - pad, ymax + pad)
+    ax.legend()
+    savefig(os.path.join(args.out_dir, "qnoise_curve.png"))
     return df
 
 
 # -----------------------------
 # Exp-3A++: Hard false-noise curve
 # -----------------------------
-def exp_qnoise_hard_false_curve(args, model, graphs, test_df, device, cpt_final):
+def exp_qnoise_hard_false_curve(args, model, graphs, test_df, device, cpt_final) -> pd.DataFrame:
     base_map = exercise_concept_map(test_df)
     hard_map = build_hard_false_map(base_map, cpt_final, args.num_concepts, topk_pool=args.hard_pool)
 
@@ -365,25 +423,91 @@ def exp_qnoise_hard_false_curve(args, model, graphs, test_df, device, cpt_final)
     df = pd.DataFrame(rows)
     df.to_csv(os.path.join(args.out_dir, "qnoise_hard_curve.csv"), index=False)
 
+    # 单图（保留）
     plt.figure(figsize=(7.0, 4.8))
-    plt.plot(df["rho"], df["auc"], marker="o", label="false_hard")
-    plt.xlabel("Q-noise rate ρ")
-    plt.ylabel("Test AUC")
-    plt.title("Hard Q-noise Robustness (semantic hard false concepts)")
+    ax = plt.gca()
+    ax.plot(df["rho"], df["auc"], marker="o", label="false_hard")
+    ax.set_xlabel("Q-noise rate ρ")
+    ax.set_ylabel("Test AUC")
+    ax.set_title("Hard Q-noise Robustness (semantic hard false concepts)")
+    ax.grid(True, alpha=0.6)
+    ax.yaxis.set_major_formatter(FormatStrFormatter('%.4f'))
+
     ymin, ymax = df["auc"].min(), df["auc"].max()
     pad = max(1e-4, (ymax - ymin) * 0.25)
-    plt.ylim(ymin - pad, ymax + pad)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(args.out_dir, "qnoise_hard_curve.png"), dpi=260)
-    plt.close()
+    ax.set_ylim(ymin - pad, ymax + pad)
+    ax.legend()
+    savefig(os.path.join(args.out_dir, "qnoise_hard_curve.png"))
     return df
+
+
+# -----------------------------
+# New: Combo figure for Exp-3A (main paper friendly)
+# -----------------------------
+def plot_qnoise_combo(args, df_q: pd.DataFrame, df_hard: pd.DataFrame):
+    out_path = os.path.join(args.out_dir, "fig_m3_qnoise_combo.png")
+
+    # Build common y-limits for comparability
+    all_auc = np.concatenate([df_q["auc"].to_numpy(), df_hard["auc"].to_numpy()])
+    ymin, ymax = float(all_auc.min()), float(all_auc.max())
+    pad = max(1e-4, (ymax - ymin) * 0.25)
+    ylo, yhi = ymin - pad, ymax + pad
+
+    fig, axes = plt.subplots(1, 2, figsize=(11.6, 4.3))
+    ax1, ax2 = axes
+
+    # (a) missing/false
+    for mode in ["missing", "false"]:
+        sub = df_q[df_q["mode"] == mode].sort_values("rho")
+        ax1.plot(sub["rho"], sub["auc"], marker="o", label=mode)
+        # annotate endpoints
+        if len(sub) > 0:
+            a0 = float(sub.iloc[0]["auc"])
+            aT = float(sub.iloc[-1]["auc"])
+            ax1.annotate(fmt4(a0), (float(sub.iloc[0]["rho"]), a0), xytext=(0, 8),
+                         textcoords='offset points', ha='center', fontsize=9)
+            ax1.annotate(fmt4(aT), (float(sub.iloc[-1]["rho"]), aT), xytext=(0, 8),
+                         textcoords='offset points', ha='center', fontsize=9)
+
+    ax1.set_title("(a) Missing vs False")
+    ax1.set_xlabel("ρ")
+    ax1.set_ylabel("Test AUC")
+    ax1.set_ylim(ylo, yhi)
+    ax1.grid(True, alpha=0.6)
+    ax1.yaxis.set_major_formatter(FormatStrFormatter('%.4f'))
+    ax1.legend()
+
+    # (b) hard false
+    sub = df_hard.sort_values("rho")
+    ax2.plot(sub["rho"], sub["auc"], marker="o", label="false_hard")
+    if len(sub) > 0:
+        a0 = float(sub.iloc[0]["auc"])
+        aT = float(sub.iloc[-1]["auc"])
+        ax2.annotate(fmt4(a0), (float(sub.iloc[0]["rho"]), a0), xytext=(0, 8),
+                     textcoords='offset points', ha='center', fontsize=9)
+        ax2.annotate(fmt4(aT), (float(sub.iloc[-1]["rho"]), aT), xytext=(0, 8),
+                     textcoords='offset points', ha='center', fontsize=9)
+
+        # delta AUC at last point
+        d = aT - a0
+        ax2.text(0.02, 0.02, f"ΔAUC@ρ_max={fmt4(d)}", transform=ax2.transAxes, fontsize=9)
+
+    ax2.set_title("(b) Hard False")
+    ax2.set_xlabel("ρ")
+    ax2.set_ylabel("Test AUC")
+    ax2.set_ylim(ylo, yhi)
+    ax2.grid(True, alpha=0.6)
+    ax2.yaxis.set_major_formatter(FormatStrFormatter('%.4f'))
+    ax2.legend()
+
+    plt.suptitle("Q-noise Robustness (Single Model, Inference-time cpt_seq Corruption)", y=1.02, fontsize=12)
+    savefig(out_path)
 
 
 # -----------------------------
 # Exp-3B: Mask-in-place attribution
 # -----------------------------
-def exp_attribution_mask_in_place(args, model, test_df, device, stu_final, exer_final, cpt_final):
+def exp_attribution_mask_in_place(args, model, test_df, device, stu_final, exer_final, cpt_final) -> pd.DataFrame:
     rng = np.random.default_rng(args.seed)
     m = exercise_concept_map(test_df)
 
@@ -456,24 +580,36 @@ def exp_attribution_mask_in_place(args, model, test_df, device, stu_final, exer_
     data = []
     labels = []
     ns = []
+    meds = []
     for b in order:
         vals = df[df["bucket"] == b]["attr_logit_mean"].to_numpy()
         if len(vals) > 0:
             data.append(vals)
             labels.append(b)
             ns.append(int(len(vals)))
+            meds.append(float(np.median(vals)))
 
+    # Violin (single figure) - keep
     plt.figure(figsize=(7.2, 4.8))
-    plt.violinplot(data, showmeans=True, showextrema=True, showmedians=True)
-    plt.xticks(np.arange(1, len(labels) + 1), [f"{b}\n(n={n})" for b, n in zip(labels, ns)])
-    plt.xlabel("|Kq| bucket")
-    plt.ylabel("Attribution (mean |Δ logit|, mask-in-place)")
-    plt.title("Concept Attribution vs Concept Count (Violin)")
-    plt.tight_layout()
-    plt.savefig(os.path.join(args.out_dir, "attribution_violin.png"), dpi=260)
-    plt.close()
+    ax = plt.gca()
+    ax.violinplot(data, showmeans=True, showextrema=True, showmedians=True)
+    ax.set_xticks(np.arange(1, len(labels) + 1))
+    ax.set_xticklabels([f"{b}\n(n={n})" for b, n in zip(labels, ns)])
+    ax.set_xlabel("|Kq| bucket")
+    ax.set_ylabel("Attribution (mean |Δ logit|, mask-in-place)")
+    ax.set_title("Concept Attribution vs Concept Count (Violin)")
+    ax.grid(True, alpha=0.5)
+    ax.yaxis.set_major_formatter(FormatStrFormatter('%.4f'))
 
+    # annotate medians (4 decimals)
+    for i, med in enumerate(meds, start=1):
+        ax.text(i, med, f"med={fmt4(med)}", ha="center", va="bottom", fontsize=9)
+
+    savefig(os.path.join(args.out_dir, "attribution_violin.png"))
+
+    # Ridge-style (single figure) - keep
     plt.figure(figsize=(7.4, 5.2))
+    ax = plt.gca()
     y0 = 0.0
     for b in order:
         vals = df[df["bucket"] == b]["attr_logit_mean"].to_numpy()
@@ -484,16 +620,16 @@ def exp_attribution_mask_in_place(args, model, test_df, device, stu_final, exer_
         kernel = np.ones(5) / 5.0
         dens = np.convolve(hist, kernel, mode="same")
         y = dens / (dens.max() + 1e-12) * 0.9 + y0
-        plt.plot(x, y, linewidth=2)
-        plt.fill_between(x, y0, y, alpha=0.25)
-        plt.text(x.min(), y0 + 0.05, f"|Kq|={b}", fontsize=9)
+        ax.plot(x, y, linewidth=2)
+        ax.fill_between(x, y0, y, alpha=0.25)
+        ax.text(float(x.min()), y0 + 0.05, f"|Kq|={b}", fontsize=9)
         y0 += 1.0
-    plt.xlabel("Attribution (mean |Δ logit|)")
-    plt.yticks([])
-    plt.title("Attribution Distribution (Ridge-style)")
-    plt.tight_layout()
-    plt.savefig(os.path.join(args.out_dir, "attribution_ridge.png"), dpi=260)
-    plt.close()
+    ax.set_xlabel("Attribution (mean |Δ logit|)")
+    ax.set_yticks([])
+    ax.set_title("Attribution Distribution (Ridge-style, smoothed histogram density)")
+    ax.grid(True, axis="x", alpha=0.35)
+    ax.xaxis.set_major_formatter(FormatStrFormatter('%.4f'))
+    savefig(os.path.join(args.out_dir, "attribution_ridge.png"))
 
     spearman = corr_spearman(df["concept_count"].to_numpy(), df["attr_logit_mean"].to_numpy()) if len(df) > 2 else 0.0
     with open(os.path.join(args.out_dir, "attribution_metrics.json"), "w", encoding="utf-8") as f:
@@ -521,22 +657,13 @@ def choose_best_focus_exercise(test_df: pd.DataFrame) -> int:
     return int(rows[0][0]) if len(rows) else -1
 
 
-def exp_interaction_synergy_single(args, model, test_df, device, stu_final, exer_final, cpt_final) -> Optional[int]:
-    rng = np.random.default_rng(args.seed)
-    m = exercise_concept_map(test_df)
-
-    q = args.focus_exercise if args.focus_exercise >= 0 else choose_best_focus_exercise(test_df)
-    if q < 0 or q not in m:
-        return None
-
-    cpts = list(dict.fromkeys(m[q]))[: args.max_concepts_per_exer]
+def _synergy_from_samples(args, model, sub: pd.DataFrame, device,
+                          stu_final, exer_final, cpt_final,
+                          q: int, cpts: List[int]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """
+    返回：delta1[L], delta2[L,L], syn[L,L], cnt_users
+    """
     L = len(cpts)
-    if L < args.min_concepts_for_single:
-        return None
-
-    sub = test_df[test_df["exer_id"] == q].sample(n=min(args.max_users_per_exer, len(test_df[test_df["exer_id"] == q])),
-                                                 random_state=args.seed)
-
     delta1 = np.zeros((L,), dtype=float)
     delta2 = np.zeros((L, L), dtype=float)
     cnt = 0
@@ -555,45 +682,71 @@ def exp_interaction_synergy_single(args, model, test_df, device, stu_final, exer
 
         for i in range(L):
             for j in range(L):
-                if i == j: continue
+                if i == j:
+                    continue
                 mask = np.ones((L,), dtype=bool); mask[i] = False; mask[j] = False
                 p_ij = predict_p(model, stu_final, exer_final, cpt_final, u, q, cpts, mask, device)
                 delta2[i, j] += (lf - logit(p_ij))
 
         cnt += 1
 
-    if cnt == 0:
-        return None
-
-    delta1 /= cnt
-    delta2 /= cnt
+    if cnt > 0:
+        delta1 /= cnt
+        delta2 /= cnt
 
     syn = np.zeros((L, L), dtype=float)
     for i in range(L):
         for j in range(L):
             syn[i, j] = 0.0 if i == j else (delta2[i, j] - delta1[i] - delta1[j])
 
+    return delta1, delta2, syn, cnt
+
+
+def exp_interaction_synergy_single(args, model, test_df, device, stu_final, exer_final, cpt_final) -> Optional[int]:
+    m = exercise_concept_map(test_df)
+
+    q = args.focus_exercise if args.focus_exercise >= 0 else choose_best_focus_exercise(test_df)
+    if q < 0 or q not in m:
+        return None
+
+    cpts = list(dict.fromkeys(m[q]))[: args.max_concepts_per_exer]
+    L = len(cpts)
+    if L < args.min_concepts_for_single:
+        return None
+
+    sub_all = test_df[test_df["exer_id"] == q]
+    if len(sub_all) == 0:
+        return None
+    sub = sub_all.sample(n=min(args.max_users_per_exer, len(sub_all)), random_state=args.seed)
+
+    delta1, delta2, syn, cnt = _synergy_from_samples(args, model, sub, device, stu_final, exer_final, cpt_final, int(q), cpts)
+    if cnt == 0:
+        return None
+
     idx = [f"cpt_{c}" for c in cpts]
     pd.DataFrame(syn, index=idx, columns=idx).to_csv(os.path.join(args.out_dir, "interaction_matrix.csv"))
 
-    # Heatmap
+    # Heatmap (single) - keep
     plt.figure(figsize=(7.0, 5.8))
-    im = plt.imshow(syn, aspect="auto", cmap=cm.coolwarm)
-    plt.colorbar(im, label="Synergy Syn(i,j)")
-    plt.xticks(range(L), [str(c) for c in cpts], rotation=45, fontsize=9)
-    plt.yticks(range(L), [str(c) for c in cpts], fontsize=9)
-    plt.title(f"Interaction Heatmap via Synergy (exercise={q})")
-    plt.tight_layout()
-    plt.savefig(os.path.join(args.out_dir, "interaction_heatmap.png"), dpi=260)
-    plt.close()
+    ax = plt.gca()
+    im = ax.imshow(syn, aspect="auto", cmap=cm.coolwarm)
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label("Synergy Syn(i,j)")
+    ax.set_xticks(range(L))
+    ax.set_xticklabels([str(c) for c in cpts], rotation=45, fontsize=9)
+    ax.set_yticks(range(L))
+    ax.set_yticklabels([str(c) for c in cpts], fontsize=9)
+    ax.set_title(f"Interaction Heatmap via Synergy (exercise={q})")
+    savefig(os.path.join(args.out_dir, "interaction_heatmap.png"))
 
-    # Network
+    # Network (single) - keep (but this is appendix-friendly)
     plt.figure(figsize=(7.0, 7.0))
+    ax = plt.gca()
     theta = np.linspace(0, 2*np.pi, L, endpoint=False)
     xs, ys = np.cos(theta), np.sin(theta)
-    plt.scatter(xs, ys, s=260)
+    ax.scatter(xs, ys, s=260)
     for i in range(L):
-        plt.text(xs[i]*1.10, ys[i]*1.10, str(cpts[i]), ha="center", va="center", fontsize=11)
+        ax.text(xs[i]*1.10, ys[i]*1.10, str(cpts[i]), ha="center", va="center", fontsize=11)
 
     edges = []
     for i in range(L):
@@ -607,19 +760,19 @@ def exp_interaction_synergy_single(args, model, test_df, device, stu_final, exer
     for i, j, w in edges:
         lw = 0.7 + 4.5 * abs(w) / maxw
         col = cm.coolwarm((w / (maxw + 1e-12) + 1) / 2)
-        plt.plot([xs[i], xs[j]], [ys[i], ys[j]], linewidth=lw, color=col, alpha=0.85)
+        ax.plot([xs[i], xs[j]], [ys[i], ys[j]], linewidth=lw, color=col, alpha=0.85)
 
-    plt.axis("off")
-    plt.title(f"Interaction Network (Synergy) exercise={q}")
-    plt.tight_layout()
-    plt.savefig(os.path.join(args.out_dir, "interaction_network.png"), dpi=260)
-    plt.close()
+    ax.axis("off")
+    ax.set_title(f"Interaction Network (Synergy) exercise={q}")
+    savefig(os.path.join(args.out_dir, "interaction_network.png"))
 
     meta = {
         "mode": "single_exercise",
         "focus_exercise": int(q),
         "concepts": [int(c) for c in cpts],
         "n_users": int(cnt),
+        "n_interactions_total": int(len(sub_all)),
+        "concept_count_used": int(L),
         "delta1_mean_abs": float(np.mean(np.abs(delta1))),
         "syn_mean_abs": float(np.mean(np.abs(syn))),
     }
@@ -659,6 +812,8 @@ def exp_interaction_synergy_global(args, model, test_df, device, stu_final, exer
     cand = cand[: min(args.global_max_exercises, len(cand))]
 
     used_exercises = 0
+    used_pairs = 0
+
     for q in cand:
         cpts_raw = list(dict.fromkeys(m[int(q)]))
         cpts = [c for c in cpts_raw if c in top_set]
@@ -667,48 +822,14 @@ def exp_interaction_synergy_global(args, model, test_df, device, stu_final, exer
         if L < 3:
             continue
 
-        sub = test_df[test_df["exer_id"] == q]
-        if len(sub) == 0:
+        sub_all = test_df[test_df["exer_id"] == q]
+        if len(sub_all) == 0:
             continue
-        sub = sub.sample(n=min(args.global_users_per_exer, len(sub)), random_state=args.seed + used_exercises)
+        sub = sub_all.sample(n=min(args.global_users_per_exer, len(sub_all)), random_state=args.seed + used_exercises)
 
-        # per-exercise synergy
-        delta1 = np.zeros((L,), dtype=float)
-        delta2 = np.zeros((L, L), dtype=float)
-        cntu = 0
-
-        for _, r in sub.iterrows():
-            u = int(r["stu_id"])
-            p_full = predict_p(model, stu_final, exer_final, cpt_final, u, int(q), cpts, np.ones((L,), dtype=bool), device)
-            lf = logit(p_full)
-
-            li = np.zeros((L,), dtype=float)
-            for i in range(L):
-                mask = np.ones((L,), dtype=bool); mask[i] = False
-                p_i = predict_p(model, stu_final, exer_final, cpt_final, u, int(q), cpts, mask, device)
-                li[i] = (lf - logit(p_i))
-            delta1 += li
-
-            for i in range(L):
-                for j in range(L):
-                    if i == j: continue
-                    mask = np.ones((L,), dtype=bool); mask[i] = False; mask[j] = False
-                    p_ij = predict_p(model, stu_final, exer_final, cpt_final, u, int(q), cpts, mask, device)
-                    delta2[i, j] += (lf - logit(p_ij))
-
-            cntu += 1
-
+        delta1, delta2, syn, cntu = _synergy_from_samples(args, model, sub, device, stu_final, exer_final, cpt_final, int(q), cpts)
         if cntu == 0:
             continue
-
-        delta1 /= cntu
-        delta2 /= cntu
-
-        syn = np.zeros((L, L), dtype=float)
-        for i in range(L):
-            for j in range(L):
-                if i == j: syn[i, j] = 0.0
-                else: syn[i, j] = delta2[i, j] - delta1[i] - delta1[j]
 
         # 汇总到 global 概念对矩阵
         for i in range(L):
@@ -719,6 +840,7 @@ def exp_interaction_synergy_global(args, model, test_df, device, stu_final, exer
                 gi, gj = idx_map[ci], idx_map[cj]
                 syn_sum[gi, gj] += float(syn[i, j])
                 syn_cnt[gi, gj] += 1.0
+                used_pairs += 1
 
         used_exercises += 1
 
@@ -728,26 +850,33 @@ def exp_interaction_synergy_global(args, model, test_df, device, stu_final, exer
     syn_avg = syn_sum / np.maximum(syn_cnt, 1.0)
 
     # 保存
-    dfM = pd.DataFrame(syn_avg, index=[f"cpt_{c}" for c in top_concepts], columns=[f"cpt_{c}" for c in top_concepts])
+    dfM = pd.DataFrame(
+        syn_avg,
+        index=[f"cpt_{c}" for c in top_concepts],
+        columns=[f"cpt_{c}" for c in top_concepts]
+    )
     dfM.to_csv(os.path.join(args.out_dir, "interaction_matrix_global.csv"))
 
-    # 画 global heatmap
+    # 单图：global heatmap（保留）
     plt.figure(figsize=(9.0, 7.6))
-    im = plt.imshow(syn_avg, aspect="auto", cmap=cm.coolwarm)
-    plt.colorbar(im, label="Synergy Syn(i,j) (global avg)")
+    ax = plt.gca()
+    im = ax.imshow(syn_avg, aspect="auto", cmap=cm.coolwarm)
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label("Synergy Syn(i,j) (global avg)")
     step = max(1, M // 15)
     ticks = list(range(0, M, step))
-    plt.xticks(ticks, [str(top_concepts[t]) for t in ticks], rotation=45, fontsize=8)
-    plt.yticks(ticks, [str(top_concepts[t]) for t in ticks], fontsize=8)
-    plt.title(f"Global Concept Interaction Heatmap (top{M} concepts, sampled_exer={used_exercises})")
-    plt.tight_layout()
-    plt.savefig(os.path.join(args.out_dir, "interaction_heatmap_global.png"), dpi=260)
-    plt.close()
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([str(top_concepts[t]) for t in ticks], rotation=45, fontsize=8)
+    ax.set_yticks(ticks)
+    ax.set_yticklabels([str(top_concepts[t]) for t in ticks], fontsize=8)
+    ax.set_title(f"Global Concept Interaction Heatmap (top{M}, sampled_exer={used_exercises})")
+    savefig(os.path.join(args.out_dir, "interaction_heatmap_global.png"))
 
     meta = {
         "mode": "global_aggregate",
         "top_concepts": [int(c) for c in top_concepts],
         "sampled_exercises": int(used_exercises),
+        "used_pairs": int(used_pairs),
         "avg_abs_syn": float(np.mean(np.abs(syn_avg[syn_cnt > 0]))),
     }
     with open(os.path.join(args.out_dir, "interaction_meta_global.json"), "w", encoding="utf-8") as f:
@@ -757,18 +886,117 @@ def exp_interaction_synergy_global(args, model, test_df, device, stu_final, exer
 
 
 # -----------------------------
+# New: global combo fig (heatmap + top-edges bar)
+# -----------------------------
+def _top_edges_from_global(syn_avg: np.ndarray, syn_cnt: np.ndarray, top_concepts: List[int], topk_each: int = 10):
+    """
+    计算对称 synergy：
+      S_sym = (S + S^T)/2
+    返回 pos/neg top edges（去掉对角线，且必须出现过：syn_cnt>0）
+    """
+    M = syn_avg.shape[0]
+    S = syn_avg.copy()
+    C = syn_cnt.copy()
+    # mask invalid
+    valid = (C > 0)
+    np.fill_diagonal(valid, False)
+
+    Ssym = 0.5 * (S + S.T)
+    # only keep upper triangle to avoid duplicates
+    iu, ju = np.triu_indices(M, k=1)
+    vals = []
+    for i, j in zip(iu, ju):
+        if valid[i, j] or valid[j, i]:
+            vals.append((i, j, float(Ssym[i, j])))
+
+    if len(vals) == 0:
+        return Ssym, [], []
+
+    vals_sorted = sorted(vals, key=lambda x: x[2], reverse=True)
+    pos = [(i, j, v) for (i, j, v) in vals_sorted if v > 0][:topk_each]
+    neg = [(i, j, v) for (i, j, v) in sorted(vals, key=lambda x: x[2]) if v < 0][:topk_each]
+    return Ssym, pos, neg
+
+
+def plot_interaction_global_combo(args):
+    """
+    依赖 interaction_matrix_global.csv 存在（由 exp_interaction_synergy_global 生成）
+    输出：fig_m3_interaction_global_combo.png
+    """
+    csv_path = os.path.join(args.out_dir, "interaction_matrix_global.csv")
+    if not os.path.exists(csv_path):
+        return
+
+    dfG = pd.read_csv(csv_path, index_col=0)
+    syn_avg = dfG.values.astype(float)
+
+    # 读取 cnt（若无则用 >0 mask 近似）
+    cnt_path = os.path.join(args.out_dir, "interaction_meta_global.json")
+    # 这里没有逐格 cnt 保存；我们用 syn_avg!=0 近似 valid（保守）
+    syn_cnt = (np.abs(syn_avg) > 0).astype(float)
+
+    # parse top_concepts from index names: "cpt_12"
+    top_concepts = [int(s.replace("cpt_", "")) for s in dfG.index.tolist()]
+
+    Ssym, pos, neg = _top_edges_from_global(syn_avg, syn_cnt, top_concepts, topk_each=args.global_top_edges_each)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12.8, 5.2))
+    ax1, ax2 = axes
+
+    # (a) sym heatmap
+    im = ax1.imshow(Ssym, aspect="auto", cmap=cm.coolwarm)
+    cbar = plt.colorbar(im, ax=ax1, fraction=0.046, pad=0.03)
+    cbar.set_label("Synergy (sym avg)")
+    step = max(1, len(top_concepts) // 12)
+    ticks = list(range(0, len(top_concepts), step))
+    ax1.set_xticks(ticks)
+    ax1.set_xticklabels([str(top_concepts[t]) for t in ticks], rotation=45, fontsize=8)
+    ax1.set_yticks(ticks)
+    ax1.set_yticklabels([str(top_concepts[t]) for t in ticks], fontsize=8)
+    ax1.set_title("(a) Global Interaction Heatmap (Sym)")
+
+    # (b) top edges bar (pos+neg)
+    bars = []
+    labels = []
+
+    # neg first (more negative at bottom), then pos
+    for i, j, v in neg[::-1]:
+        bars.append(v)
+        labels.append(f"{top_concepts[i]}-{top_concepts[j]}")
+    for i, j, v in pos:
+        bars.append(v)
+        labels.append(f"{top_concepts[i]}-{top_concepts[j]}")
+
+    if len(bars) == 0:
+        ax2.text(0.5, 0.5, "No valid edges for top-bar", ha="center", va="center")
+        ax2.axis("off")
+    else:
+        y = np.arange(len(bars))
+        ax2.barh(y, bars)
+        ax2.set_yticks(y)
+        ax2.set_yticklabels(labels, fontsize=8)
+        ax2.axvline(0.0, linewidth=1.0, color="#333333", alpha=0.8)
+        ax2.xaxis.set_major_formatter(FormatStrFormatter('%.4f'))
+        ax2.set_title(f"(b) Top Synergy Edges (neg {len(neg)} + pos {len(pos)})")
+        ax2.set_xlabel("Synergy value")
+
+    plt.suptitle("Global Concept Interaction (Heatmap + Top Edges)", y=1.02, fontsize=12)
+    savefig(os.path.join(args.out_dir, "fig_m3_interaction_global_combo.png"))
+
+
+# -----------------------------
 # Args / Main
 # -----------------------------
 def get_args():
     root = os.path.dirname(os.path.abspath(__file__))
     p = argparse.ArgumentParser()
 
-    # Dataset selection (NEW)
+    # Dataset selection
     p.add_argument("--dataset", type=str, default="assist_09",
                    choices=["assist_09", "assist_17", "junyi"],
                    help="选择数据集：assist_09, assist_17, junyi")
 
-    # Paths (will be overridden based on dataset)
+    # Paths
     p.add_argument("--train_file", type=str, default=None)
     p.add_argument("--valid_file", type=str, default=None)
     p.add_argument("--test_file",  type=str, default=None)
@@ -817,12 +1045,15 @@ def get_args():
     p.add_argument("--global_max_exercises", type=int, default=80)
     p.add_argument("--global_users_per_exer", type=int, default=64)
 
+    # plotting: top edges each side for combo bar
+    p.add_argument("--global_top_edges_each", type=int, default=10)
+
     args = p.parse_args()
-    
+
     # Auto-configure paths based on dataset
     dataset = args.dataset
     data_dir = os.path.join(root, "data", dataset)
-    
+
     if args.train_file is None:
         args.train_file = os.path.join(data_dir, "train.csv")
     if args.valid_file is None:
@@ -834,14 +1065,10 @@ def get_args():
     if args.out_dir is None:
         args.out_dir = os.path.join(root, "exp_m3_out", dataset)
     if args.model_path is None:
-        # Try dataset-specific model first, then fallback to default
         model_path_dataset = os.path.join(root, "saved_models", dataset, "best_model.pth")
         model_path_default = os.path.join(root, "saved_models", "best_model.pth")
-        if os.path.exists(model_path_dataset):
-            args.model_path = model_path_dataset
-        else:
-            args.model_path = model_path_default
-    
+        args.model_path = model_path_dataset if os.path.exists(model_path_dataset) else model_path_default
+
     if not os.path.exists(args.model_path):
         raise FileNotFoundError(
             f"[ERR] model_path not found: {args.model_path}\n"
@@ -852,6 +1079,7 @@ def get_args():
 
 def main():
     args = get_args()
+    set_pub_style()
     set_seed(args.seed)
     safe_mkdir(args.out_dir)
     args.qnoise_rates = parse_list_floats(args.qnoise_rates)
@@ -877,13 +1105,19 @@ def main():
     sanity = quick_mask_sanity_check(args, model, test_df, device, stu_final, exer_final, cpt_final)
     mask_effective = bool(sanity.get("mask_effective", False))
 
-    # Exp-3A：Q-noise curve（修复扰动空转）
+    # Exp-3A：Q-noise curve（单图保留）
     df_curve = exp_qnoise_curve(args, model, graphs, test_df, device)
 
-    # Exp-3A++：Hard false（修复 add_n）
+    # Exp-3A++：Hard false（单图保留）
     df_hard = exp_qnoise_hard_false_curve(args, model, graphs, test_df, device, cpt_final)
 
-    # 3B/3C：只有在 mask 生效时才生成（否则视为模型缺陷，自动删除这部分生成逻辑）
+    # 新增：组合主图（不影响单图）
+    try:
+        plot_qnoise_combo(args, df_curve, df_hard)
+    except Exception as e:
+        print("[Warn] plot_qnoise_combo failed:", e)
+
+    # 3B/3C：只有在 mask 生效时才生成（否则视为模型缺陷，自动跳过）
     df_attr = pd.DataFrame()
     focus_single = None
     global_ok = False
@@ -893,6 +1127,17 @@ def main():
         focus_single = exp_interaction_synergy_single(args, model, test_df, device, stu_final, exer_final, cpt_final)
         if focus_single is None:
             global_ok = exp_interaction_synergy_global(args, model, test_df, device, stu_final, exer_final, cpt_final)
+        else:
+            # 即便 single 有，也仍可额外生成 global（如果你后期需要）
+            # 这里保持默认不强制，避免额外算力；如需可手动把注释去掉
+            # global_ok = exp_interaction_synergy_global(args, model, test_df, device, stu_final, exer_final, cpt_final)
+            global_ok = os.path.exists(os.path.join(args.out_dir, "interaction_matrix_global.csv"))
+
+        # 若 global csv 存在则生成 combo（heatmap+top edges bar）
+        try:
+            plot_interaction_global_combo(args)
+        except Exception as e:
+            print("[Warn] plot_interaction_global_combo failed:", e)
 
     # 汇总 + Excel
     summary = {
@@ -905,7 +1150,22 @@ def main():
         "qnoise_rows": int(len(df_curve)),
         "hard_rows": int(len(df_hard)),
         "attr_rows": int(len(df_attr)) if mask_effective else 0,
-        "note": "If mask_effective=False, Exp-3B/3C are skipped as model-head defect."
+        "note": "If mask_effective=False, Exp-3B/3C are skipped as model-head defect.",
+        "figs": {
+            "single_keep": [
+                "qnoise_curve.png",
+                "qnoise_hard_curve.png",
+                "attribution_violin.png",
+                "attribution_ridge.png",
+                "interaction_heatmap.png",
+                "interaction_network.png",
+                "interaction_heatmap_global.png"
+            ],
+            "combo_added": [
+                "fig_m3_qnoise_combo.png",
+                "fig_m3_interaction_global_combo.png"
+            ]
+        }
     }
     with open(os.path.join(args.out_dir, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
@@ -932,6 +1192,10 @@ def main():
 
     print("[OK] Module-3 experiments finished:", args.out_dir)
     print("[OK] Excel exported:", excel_path)
+    if os.path.exists(os.path.join(args.out_dir, "fig_m3_qnoise_combo.png")):
+        print("[OK] Combo fig (qnoise): fig_m3_qnoise_combo.png")
+    if os.path.exists(os.path.join(args.out_dir, "fig_m3_interaction_global_combo.png")):
+        print("[OK] Combo fig (interaction global): fig_m3_interaction_global_combo.png")
 
 
 if __name__ == "__main__":
