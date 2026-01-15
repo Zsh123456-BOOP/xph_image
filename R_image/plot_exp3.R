@@ -11,7 +11,6 @@ suppressPackageStartupMessages({
   library(reshape2)
   library(gridExtra)
   library(cowplot)
-  library(igraph)
   library(scales)
 })
 
@@ -103,7 +102,13 @@ if (file.exists(file.path(data_dir, "qnoise_curve.csv")) &&
     scale_x_continuous(labels = percent_format(accuracy = 1)) +
     labs(x = expression(rho ~ "(Noise Rate)"), y = "Test AUC") +
     theme_cd_pub() + 
-    theme(legend.position = "bottom")
+    theme(
+      legend.position = "bottom",
+      legend.box.spacing = unit(0.8, "cm"),
+      legend.spacing.x = unit(1.0, "cm"),
+      legend.key.width = unit(1.5, "cm"),
+      legend.text = element_text(margin = margin(l = 8, r = 15))
+    )
 
   # Right: Hard False
   p2 <- ggplot(qhard, aes(x = rho, y = auc)) +
@@ -149,74 +154,7 @@ if (file.exists(file.path(data_dir, "qnoise_curve.csv")) &&
 }
 
 # ============================================================
-# 3) Attribution (Violin + Ridge) - Enhanced
-# ============================================================
-if (file.exists(file.path(data_dir, "attribution_table.csv"))) {
-  attr <- read.csv(file.path(data_dir, "attribution_table.csv"))
-  attr$bucket <- cut(attr$concept_count, breaks = c(0, 2, 3, 4, Inf),
-                     labels = c("2", "3", "4", "5+"), right = TRUE)
-
-  # Enhanced color palette for buckets
-  bucket_colors <- c(
-    "2" = CD_PAL$blue, 
-    "3" = CD_PAL$teal, 
-    "4" = CD_PAL$orange, 
-    "5+" = CD_PAL$red
-  )
-
-  # Violin plot
-  p <- ggplot(attr, aes(x = bucket, y = attr_logit_mean, fill = bucket)) +
-    geom_violin(
-      alpha = 0.7, 
-      color = CD_PAL$dark, 
-      linewidth = 0.5,
-      trim = FALSE,
-      scale = "width"
-    ) +
-    geom_boxplot(
-      width = 0.15, 
-      fill = "white", 
-      color = CD_PAL$dark,
-      outlier.shape = NA,
-      alpha = 0.8
-    ) +
-    stat_summary(
-      fun = median, 
-      geom = "point", 
-      shape = 18, 
-      size = 4, 
-      color = CD_PAL$dark
-    ) +
-    scale_fill_manual(values = bucket_colors) +
-    scale_y_continuous(labels = lab_num(0.01)) +
-    labs(
-      x = expression(bold("Concept Count (|K"[q]*"|)")), 
-      y = "Mean Attribution (Logit)"
-    ) +
-    theme_cd_pub() + 
-    theme(legend.position = "none")
-
-  save_pdf(file.path(out_dir, "attribution_violin.pdf"), p, 
-           CD_STYLE$fig_main_w, CD_STYLE$fig_main_h)
-
-  # Ridge (Density) plot
-  p2 <- ggplot(attr, aes(x = attr_logit_mean, fill = bucket, color = bucket)) +
-    geom_density(alpha = 0.5, linewidth = CD_STYLE$lw_main) +
-    scale_fill_manual(values = bucket_colors, name = "|Kq|") +
-    scale_color_manual(values = bucket_colors, name = "|Kq|") +
-    labs(x = "Attribution Score", y = "Density") +
-    theme_cd_pub() + 
-    theme(
-      legend.position = c(0.85, 0.75),
-      legend.background = element_rect(fill = alpha("white", 0.9), color = NA)
-    )
-
-  save_pdf(file.path(out_dir, "attribution_ridge.pdf"), p2, 
-           CD_STYLE$fig_main_w, CD_STYLE$fig_main_h)
-}
-
-# ============================================================
-# 4) Interaction Heatmap - Matching reference style (coolwarm)
+# 3) Interaction Heatmap - Matching reference style (coolwarm)
 # ============================================================
 if (file.exists(file.path(data_dir, "interaction_matrix.csv"))) {
   syn_mat <- as.matrix(read.csv(file.path(data_dir, "interaction_matrix.csv"), row.names = 1))
@@ -227,6 +165,9 @@ if (file.exists(file.path(data_dir, "interaction_matrix.csv"))) {
   max_abs <- max(abs(syn_long$Val), na.rm = TRUE)
   
   # Use coolwarm-style colors matching reference image
+  # Get exercise count for title (use placeholder if not available)
+  exercise_count <- nrow(syn_mat)
+  
   p <- ggplot(syn_long, aes(x = C1, y = C2, fill = Val)) +
     geom_tile(color = NA) +  # No white borders for cleaner look
     scale_fill_gradient2(
@@ -240,10 +181,15 @@ if (file.exists(file.path(data_dir, "interaction_matrix.csv"))) {
     ) +
     scale_x_discrete(labels = function(x) gsub("cpt_", "", x), expand = c(0, 0)) +
     scale_y_discrete(labels = function(x) gsub("cpt_", "", x), expand = c(0, 0)) +
-    labs(x = NULL, y = NULL) +
+    labs(
+      x = NULL, y = NULL,
+      title = sprintf("Interaction Heatmap via Synergy (concepts=%d)", exercise_count)
+    ) +
     theme_cd_pub() + 
     coord_fixed() +
     theme(
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5, margin = margin(b = 10)),
+      plot.title.position = "plot",
       axis.text.x = element_text(angle = 0, hjust = 0.5, size = 11, face = "bold"),
       axis.text.y = element_text(size = 11, face = "bold"),
       axis.ticks = element_blank(),
@@ -255,82 +201,6 @@ if (file.exists(file.path(data_dir, "interaction_matrix.csv"))) {
 
   save_pdf(file.path(out_dir, "interaction_heatmap.pdf"), p, 
            CD_STYLE$fig_square_w, CD_STYLE$fig_square_h)
-}
-
-# ============================================================
-# 5) Interaction Network - Enhanced
-# ============================================================
-if (file.exists(file.path(data_dir, "interaction_matrix.csv"))) {
-  syn_mat <- as.matrix(read.csv(file.path(data_dir, "interaction_matrix.csv"), row.names = 1))
-  concepts <- gsub("cpt_", "", rownames(syn_mat))
-  n <- nrow(syn_mat)
-
-  edges <- data.frame()
-  for (i in 1:(n - 1)) {
-    for (j in (i + 1):n) {
-      w <- syn_mat[i, j]
-      if (abs(w) > 1e-6) {
-        edges <- rbind(edges, data.frame(from = concepts[i], to = concepts[j], weight = w))
-      }
-    }
-  }
-
-  if (nrow(edges) > 0) {
-    g <- graph_from_data_frame(edges, directed = FALSE, vertices = data.frame(name = concepts))
-
-    # Layout weights must be positive
-    eps <- 1e-6
-    w_layout <- pmax(abs(E(g)$weight), eps)
-
-    set.seed(42)
-    lay <- layout_with_fr(g, weights = w_layout)
-
-    # Enhanced visual attributes
-    edge_cols <- ifelse(
-      E(g)$weight > 0,
-      adjustcolor("#B40426", 0.80),  # Coolwarm red
-      adjustcolor("#3B4CC0", 0.80)   # Coolwarm blue
-    )
-    edge_w <- pmax(1.5, abs(E(g)$weight) * 6 + 1.5)
-
-    # Calculate node degree for sizing
-    node_degree <- degree(g)
-    node_sizes <- 25 + (node_degree / max(node_degree)) * 15
-
-    grDevices::cairo_pdf(
-      file.path(out_dir, "interaction_network.pdf"), 
-      width = 7, height = 7, bg = "white"
-    )
-    par(mar = c(1, 1, 1, 1), bg = "white", family = CD_STYLE$font_family)
-
-    plot(
-      g, layout = lay,
-      vertex.size = node_sizes,
-      vertex.color = adjustcolor(CD_PAL$teal, 0.3),
-      vertex.frame.color = CD_PAL$dark,
-      vertex.frame.width = 1.5,
-      vertex.label.color = CD_PAL$dark,
-      vertex.label.font = 2,
-      vertex.label.cex = 1.0,
-      vertex.label.family = CD_STYLE$font_family,
-      edge.width = edge_w,
-      edge.color = edge_cols,
-      edge.curved = 0.15
-    )
-
-    # Add legend
-    legend(
-      "bottomleft",
-      legend = c("Positive (Synergy)", "Negative (Antagonism)"),
-      col = c("#B40426", "#3B4CC0"),
-      lwd = 3,
-      bty = "n",
-      cex = 0.9
-    )
-
-    invisible(dev.off())
-    cat("[SAVED] interaction_network.pdf\n")
-  }
 }
 
 cat("\n[Exp3] Completed\n")

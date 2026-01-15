@@ -88,7 +88,7 @@ for (dataset in datasets) {
   }
 
   # ------------------------------------------------------------
-  # 2) Specialist Dimensions (Lollipop) - Enhanced
+  # 2) Specialist Dimensions (Bar Chart) - Simple style
   # ------------------------------------------------------------
   if (file.exists(file.path(data_dir, "alignment_specialists.csv"))) {
     spec <- .safe_read_csv(file.path(data_dir, "alignment_specialists.csv"))
@@ -111,97 +111,33 @@ for (dataset in datasets) {
       bar_data <- bar_data[order(bar_data$dim), ]
       bar_data$label <- factor(bar_data$label, levels = bar_data$label)
 
+      # Simple bar chart matching reference
       p <- ggplot(bar_data, aes(x = label, y = corr)) +
-        geom_segment(
-          aes(xend = label, y = 0, yend = corr),
-          color = CD_PAL$gray, 
-          linewidth = 1.2
-        ) +
-        geom_point(
-          aes(fill = corr),
-          size = CD_STYLE$pt_big,
-          shape = 21, 
-          stroke = 1.0,
-          color = CD_PAL$dark
-        ) +
-        scale_fill_gradient(
-          low = CD_PAL$teal, 
-          high = CD_PAL$blue,
-          name = "|Corr|"
+        geom_bar(
+          stat = "identity",
+          fill = "#4472C4",  # Blue color matching reference
+          color = NA,
+          width = 0.75
         ) +
         scale_y_continuous(
-          limits = c(0, 1), 
-          breaks = seq(0, 1, 0.2), 
-          expand = c(0, 0.05)
+          limits = c(0, max(bar_data$corr) * 1.1), 
+          breaks = pretty_breaks(n = 5),
+          expand = c(0, 0)
         ) +
         labs(
           x = "Dimension:Concept Mapping", 
-          y = "|Spearman Correlation|"
+          y = "Spearman Corr"
         ) +
         theme_cd_pub() +
         theme(
-          axis.text.x = element_text(angle = 50, hjust = 1, vjust = 1, size = 9),
-          legend.position = "right"
+          axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+          panel.grid.major.x = element_blank()
         )
 
       save_pdf(file.path(out_dir, "alignment_specialist_dims.pdf"), p, w = 7.5, h = 4.0)
     }
   }
 
-  # ------------------------------------------------------------
-  # 3) MI Matrix (Heatmap) - Enhanced
-  # ------------------------------------------------------------
-  if (file.exists(file.path(data_dir, "cmig_pairs.csv"))) {
-    pairs <- .safe_read_csv(file.path(data_dir, "cmig_pairs.csv"))
-
-    if (nrow(pairs) > 0 && all(c("i", "j", "MI") %in% names(pairs))) {
-      pairs$i <- .as_int(pairs$i)
-      pairs$j <- .as_int(pairs$j)
-      pairs$MI <- .as_num(pairs$MI)
-
-      K <- min(max(c(pairs$i, pairs$j), na.rm = TRUE) + 1L, 64L)
-      K <- max(K, 1L)
-
-      M <- matrix(0, nrow = K, ncol = K)
-      for (row_idx in seq_len(nrow(pairs))) {
-        i <- pairs$i[row_idx] + 1L
-        j <- pairs$j[row_idx] + 1L
-        if (is.na(i) || is.na(j)) next
-        if (i <= K && j <= K && i >= 1L && j >= 1L) {
-          M[i, j] <- pairs$MI[row_idx]
-          M[j, i] <- pairs$MI[row_idx]
-        }
-      }
-
-      M_long <- reshape2::melt(M)
-      colnames(M_long) <- c("Dim_i", "Dim_j", "MI")
-
-      p <- ggplot(M_long, aes(x = Dim_j, y = Dim_i, fill = MI)) +
-        geom_tile(color = "white", linewidth = 0.12) +
-        scale_fill_viridis_c(
-          option = "magma", 
-          direction = -1,
-          limits = c(0, 0.2), 
-          oob = squish, 
-          name = "MI",
-          alpha = 0.95
-        ) +
-        scale_x_continuous(expand = c(0, 0)) +
-        scale_y_continuous(expand = c(0, 0)) +
-        labs(x = "Latent Dimension", y = "Latent Dimension") +
-        theme_cd_pub() +
-        theme(
-          legend.position = "right",
-          legend.key.height = unit(1.2, "cm"),
-          axis.text = element_blank(),
-          axis.ticks = element_blank(),
-          panel.grid = element_blank()
-        ) +
-        coord_fixed()
-
-      save_pdf(file.path(out_dir, "mi_matrix_sorted.pdf"), p, w = 5.2, h = 4.8)
-    }
-  }
 
   # ------------------------------------------------------------
   # 4) Combo: Leakage (Bubble + ECDF) - Enhanced
@@ -233,11 +169,11 @@ for (dataset in datasets) {
       ) +
       scale_fill_viridis_c(
         option = "viridis", 
-        name = "Mean\n|Corr|",
-        guide = guide_colorbar(barwidth = 0.8, barheight = 3)
+        name = "Mean\nCorr",
+        guide = guide_colorbar(barwidth = 1.0, barheight = 5)
       ) +
       scale_size_continuous(range = c(3, 8), guide = "none") +
-      labs(x = "Leakage Count", y = "Max |Correlation|") +
+      labs(x = "Leakage Count", y = "Max Correlation") +
       theme_cd_pub() +
       theme(legend.position = "right")
 

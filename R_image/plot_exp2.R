@@ -37,8 +37,12 @@ for (dataset in datasets) {
 
   if (!dir.exists(data_dir)) next
 
+  # Storage for combo plots
+  p_robust <- NULL
+  p_pareto <- NULL
+
   # ============================================================
-  # 1) Robustness Curve (Dual Axis) - Enhanced
+  # 1) Robustness Curve (Dual Axis)
   # ============================================================
   if (file.exists(file.path(data_dir, "robust_curve.csv"))) {
     robust <- read.csv(file.path(data_dir, "robust_curve.csv"))
@@ -47,7 +51,7 @@ for (dataset in datasets) {
     acc_range <- range(robust$accuracy)
     robust$acc_scaled <- (robust$accuracy - acc_range[1]) / diff(acc_range) * diff(auc_range) + auc_range[1]
 
-    p <- ggplot(robust, aes(x = drop_rate)) +
+    p_robust <- ggplot(robust, aes(x = drop_rate)) +
       # AUC line
       geom_line(
         aes(y = auc, color = "AUC"), 
@@ -76,11 +80,11 @@ for (dataset in datasets) {
         name = "Metric"
       ) +
       scale_y_continuous(
-        name = "Test AUC",
+        name = "AUC",
         labels = lab_num(0.001),
         sec.axis = sec_axis(
           ~ (. - auc_range[1]) / diff(auc_range) * diff(acc_range) + acc_range[1],
-          name = "Test Accuracy",
+          name = "ACC",
           labels = lab_num(0.001)
         )
       ) +
@@ -114,12 +118,12 @@ for (dataset in datasets) {
         )
       )
 
-    save_pdf(file.path(out_dir, "robust_curve.pdf"), p, 
+    save_pdf(file.path(out_dir, "robust_curve.pdf"), p_robust, 
              CD_STYLE$fig_main_w, CD_STYLE$fig_main_h)
   }
 
   # ============================================================
-  # 2) Pareto Trajectory (Combo) - Enhanced
+  # 2) Pareto Trajectory
   # ============================================================
   if (file.exists(file.path(data_dir, "pareto.csv"))) {
     pareto <- read.csv(file.path(data_dir, "pareto.csv"))
@@ -138,7 +142,7 @@ for (dataset in datasets) {
     # Use plotmath for lambda expression
     label_expr <- sprintf('lambda^"*" == %.3f', lambda_star)
 
-    # Left: Trajectory plot
+    # Trajectory plot
     p1 <- ggplot(pareto, aes(x = D_view_mean, y = error)) +
       geom_path(
         linetype = "dashed", 
@@ -156,11 +160,11 @@ for (dataset in datasets) {
         option = "plasma",
         guide = guide_colorbar(barwidth = 0.8, barheight = 3)
       ) +
-      # Highlight optimal point - use simple filled circle instead of star
+      # Highlight optimal point - simple filled circle
       geom_point(
         data = pareto[idx_star, ],
         aes(x = D_view_mean, y = error),
-        shape = 21,        # Filled circle with border
+        shape = 21,
         size = 6, 
         color = CD_PAL$dark,
         fill = CD_PAL$red,
@@ -189,7 +193,7 @@ for (dataset in datasets) {
     save_pdf(file.path(single_dir, "pareto_trajectory.pdf"), p1, 
              CD_STYLE$fig_main_w, CD_STYLE$fig_main_h)
 
-    # Right: Evidence plot
+    # Evidence plot
     if (all(c("D_exer", "D_cpt") %in% names(pareto))) {
       p2 <- ggplot(pareto, aes(x = D_exer, y = D_cpt, color = lambda_contrastive)) +
         geom_abline(
@@ -204,7 +208,6 @@ for (dataset in datasets) {
           option = "plasma",
           guide = guide_colorbar(barwidth = 0.8, barheight = 3)
         ) +
-        # Simple filled circle for optimal point
         geom_point(
           data = pareto[idx_star, ],
           aes(x = D_exer, y = D_cpt),
@@ -231,14 +234,37 @@ for (dataset in datasets) {
     save_pdf(file.path(single_dir, "pareto_evidence.pdf"), p2, 
              CD_STYLE$fig_main_w, CD_STYLE$fig_main_h)
 
-    # Combo without A/B labels (cleaner)
-    p_combo <- cowplot::plot_grid(
+    # Pareto combo (horizontal)
+    p_pareto <- cowplot::plot_grid(
       p1, p2, 
       ncol = 2, 
       align = "h"
     )
-    save_pdf(file.path(out_dir, "pareto.pdf"), p_combo, 
+    save_pdf(file.path(out_dir, "pareto.pdf"), p_pareto, 
              CD_STYLE$fig_combo_w + 2, CD_STYLE$fig_combo_h)
+  }
+
+  # ============================================================
+  # 3) Combined: Robust + Pareto side by side (horizontal)
+  # ============================================================
+  if (!is.null(p_robust) && !is.null(p_pareto)) {
+    # Modify robust plot for combo (larger x-axis font)
+    p_robust_combo <- p_robust + 
+      theme(
+        axis.title.x = element_text(size = 14, face = "bold"),
+        axis.text.x = element_text(size = 12)
+      )
+    
+    # Create horizontal combo (side by side)
+    p_full_combo <- cowplot::plot_grid(
+      p_robust_combo,
+      p_pareto,
+      ncol = 2,
+      rel_widths = c(1, 1.8),
+      align = "h"
+    )
+    save_pdf(file.path(out_dir, "combo_robust_pareto.pdf"), p_full_combo, 
+             w = 16, h = 4.5)
   }
 }
 
