@@ -1,0 +1,71 @@
+{
+  "timestamp": "2026-01-15T02:32:30.821548",
+  "total_duration_sec": 376.0083899497986,
+  "success_count": 9,
+  "total_count": 9,
+  "results": [
+    {
+      "module": 1,
+      "dataset": "junyi",
+      "success": true,
+      "duration": 61.82315444946289,
+      "error": null
+    },
+    {
+      "module": 1,
+      "dataset": "assist_09",
+      "success": true,
+      "duration": 81.6243417263031,
+      "error": null
+    },
+    {
+      "module": 1,
+      "dataset": "assist_17",
+      "success": true,
+      "duration": 102.42691230773926,
+      "error": null
+    },
+    {
+      "module": 2,
+      "dataset": "junyi",
+      "success": true,
+      "duration": 70.876944065094,
+      "error": null
+    },
+    {
+      "module": 2,
+      "dataset": "assist_09",
+      "success": true,
+      "duration": 99.26483726501465,
+      "error": null
+    },
+    {
+      "module": 2,
+      "dataset": "assist_17",
+      "success": true,
+      "duration": 122.66088390350342,
+      "error": null
+    },
+    {
+      "module": 3,
+      "dataset": "junyi",
+      "success": true,
+      "duration": 77.68952918052673,
+      "error": null
+    },
+    {
+      "module": 3,
+      "dataset": "assist_09",
+      "success": true,
+      "duration": 143.4780571460724,
+      "error": null
+    },
+    {
+      "module": 3,
+      "dataset": "assist_17",
+      "success": true,
+      "duration": 150.59387874603271,
+      "error": null
+    }
+  ]
+}

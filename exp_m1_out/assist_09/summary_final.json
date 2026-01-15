@@ -21,5 +21,13 @@
       41
     ],
     "note": "Top specialists extracted."
+  },
+  "Combo": {
+    "combo_dir": "/home/zsh/xph_image/exp_m1_out/assist_09/combo",
+    "generated": [
+      "combo_mi_independence.png",
+      "combo_alignment_leakage.png",
+      "combo_specialists.png"
+    ]
   }
 }

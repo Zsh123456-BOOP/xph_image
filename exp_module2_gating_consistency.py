@@ -291,7 +291,7 @@ def exp_graph_robustness(args, model_path, train_df, valid_df, test_df,
 # Exp-2B: Pareto (Caching + Better CSV + Combo Figure)
 # -----------------------------
 def train_one(args, train_loader, valid_loader, graphs, num_students, num_exercises, num_concepts, device):
-    best_path = os.path.join(args.out_dir, f"model_lambda_{args.lambda_contrastive:.4f}.pth")
+    best_path = os.path.join(args.model_cache_dir, f"model_lambda_{args.lambda_contrastive:.4f}.pth")
     if os.path.exists(best_path):
         return best_path
 
@@ -444,7 +444,7 @@ def exp_pareto_with_cache(args, train_df, valid_df, test_df, num_students, num_e
     # 1) Identify which lambdas need training
     lambdas_to_train = []
     for lam in args.contrastive_lambdas:
-        path = os.path.join(args.out_dir, f"model_lambda_{lam:.4f}.pth")
+        path = os.path.join(args.model_cache_dir, f"model_lambda_{lam:.4f}.pth")
         if os.path.exists(path):
             results[float(lam)] = path
             print(f"  -> Found cached model for lambda={lam:.4f}, skipping training.")
@@ -556,6 +556,8 @@ def get_args():
     p.add_argument("--valid_file", type=str, default=None)
     p.add_argument("--test_file", type=str, default=None)
     p.add_argument("--graph_dir", type=str, default=None)
+    p.add_argument("--model_cache_dir", type=str, default=None,
+                   help="模型缓存目录，默认为 saved_models/exp2_model/{dataset}")
     p.add_argument("--out_dir", type=str, default=None)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", type=str, default="cuda:0")
@@ -613,6 +615,8 @@ def get_args():
         args.graph_dir = os.path.join(root, "graphs", dataset)
     if args.out_dir is None:
         args.out_dir = os.path.join(root, "exp_m2_out", dataset)
+    if args.model_cache_dir is None:
+        args.model_cache_dir = os.path.join(root, "saved_models", "exp2_model", dataset)
     if args.model_path is None:
         model_path_dataset = os.path.join(root, "saved_models", dataset, "best_model.pth")
         model_path_default = os.path.join(root, "saved_models", "best_model.pth")
@@ -626,6 +630,7 @@ def main():
     args = get_args()
     set_seed(args.seed)
     safe_mkdir(args.out_dir)
+    safe_mkdir(args.model_cache_dir)
 
     args.graph_drop_rates = parse_list_floats(args.graph_drop_rates)
     args.contrastive_lambdas = parse_list_floats(args.contrastive_lambdas)

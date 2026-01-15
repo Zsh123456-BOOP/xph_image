@@ -1,25 +1,33 @@
 {
   "Exp-1A_MI": {
-    "MI_mean": 0.030007747998586784,
-    "MI_median": 0.016513031857962455,
-    "NMI_mean": 0.012547428433229861,
-    "IndependenceScore": 0.9874525715667701,
+    "MI_mean": 0.021657267966975792,
+    "MI_median": 0.01855005853883641,
+    "NMI_mean": 0.008234677551966866,
+    "IndependenceScore": 0.9917653224480332,
     "note": "Clean version: MI matrix + pairs data."
   },
   "Exp-1B_Alignment": {
     "leakage_thr": 0.15,
     "specialist_max_leakage": 2,
-    "n_valid_concepts": 27,
-    "leakage_mean": 18.0,
-    "leakage_median": 20.0,
+    "n_valid_concepts": 15,
+    "leakage_mean": 2.1025641025641026,
+    "leakage_median": 1.0,
     "n_specialists_plotted": 5,
     "specialist_dims": [
-      24,
-      23,
-      19,
-      4,
-      28
+      36,
+      18,
+      9,
+      14,
+      27
     ],
     "note": "Top specialists extracted."
+  },
+  "Combo": {
+    "combo_dir": "/home/zsh/xph_image/exp_m1_out/junyi/combo",
+    "generated": [
+      "combo_mi_independence.png",
+      "combo_alignment_leakage.png",
+      "combo_specialists.png"
+    ]
   }
 }

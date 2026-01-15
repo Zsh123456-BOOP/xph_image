@@ -7,5 +7,5 @@
   ],
   "has_robust": true,
   "has_pareto": true,
-  "lambda_star": 0.8
+  "lambda_star": 1.2
 }

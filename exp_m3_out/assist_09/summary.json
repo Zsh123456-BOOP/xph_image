@@ -3,8 +3,8 @@
   "num_concepts": 123,
   "mask_sanity": {
     "ok": true,
-    "median_abs_delta_logit": 0.09118047955917175,
-    "mean_abs_delta_logit": 0.8233056140366394,
+    "median_abs_delta_logit": 0.09118051861403642,
+    "mean_abs_delta_logit": 0.8233056478647217,
     "n": 80,
     "mask_effective": true
   },
