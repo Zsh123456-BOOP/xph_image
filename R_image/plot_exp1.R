@@ -1,4 +1,9 @@
 #!/usr/bin/env Rscript
+# ============================================================
+# Experiment 1: Disentanglement Analysis (Enhanced Visuals)
+# Output: /home/zsh/xph_image/R_image/exp1/{dataset}/
+# ============================================================
+
 suppressPackageStartupMessages({
   library(ggplot2)
   library(dplyr)
@@ -12,7 +17,7 @@ base_dir <- "/home/zsh/xph_image"
 r_image_dir <- file.path(base_dir, "R_image")
 
 # -----------------------------
-# Load style (required)
+# Load unified style
 # -----------------------------
 style_path <- file.path(r_image_dir, "_style_cd.R")
 if (!file.exists(style_path)) {
@@ -22,7 +27,7 @@ source(style_path, encoding = "UTF-8")
 
 datasets <- c("assist_09", "assist_17", "junyi")
 
-# small helpers
+# Helper functions
 .safe_read_csv <- function(path, row.names = NULL) {
   tryCatch({
     read.csv(path, row.names = row.names, check.names = FALSE)
@@ -47,7 +52,7 @@ for (dataset in datasets) {
   leakage_thr <- 0.15
 
   # ------------------------------------------------------------
-  # 1) Alignment Leakage (Histogram)
+  # 1) Alignment Leakage (Histogram) - Enhanced
   # ------------------------------------------------------------
   if (file.exists(file.path(data_dir, "alignment_matrix.csv"))) {
     R_df <- .safe_read_csv(file.path(data_dir, "alignment_matrix.csv"), row.names = 1)
@@ -60,26 +65,30 @@ for (dataset in datasets) {
     p <- ggplot(df_leak, aes(x = leakage)) +
       geom_histogram(
         binwidth = 1,
-        fill = CD_PAL$teal, color = CD_PAL$navy,
-        alpha = CD_STYLE$alpha_fill, linewidth = 0.35
+        fill = CD_PAL$teal, 
+        color = CD_PAL$dark,
+        alpha = CD_STYLE$alpha_fill, 
+        linewidth = 0.5
       ) +
-      scale_x_continuous(breaks = pretty_breaks()) +
-      scale_y_continuous(expand = expansion(mult = c(0, 0.08))) +
+      geom_vline(
+        xintercept = mean(leakage), 
+        linetype = "dashed", 
+        color = CD_PAL$red, 
+        linewidth = 0.8
+      ) +
+      scale_x_continuous(breaks = pretty_breaks(n = 8)) +
+      scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
       labs(
-        x = bquote("Leakage Count (|corr| > " ~ .(leakage_thr) ~ ")"),
+        x = bquote(bold("Leakage Count (|corr| > " ~ .(leakage_thr) ~ ")")),
         y = "Count (Latent Dims)"
       ) +
-      theme_cd_pub() +
-      theme(
-        axis.title.x = element_text(face = "bold")
-      )
+      theme_cd_pub()
 
-    save_pdf(file.path(out_dir, "alignment_leakage.pdf"), p, w = 4.2, h = 3.2)
-
+    save_pdf(file.path(out_dir, "alignment_leakage.pdf"), p, w = 5.0, h = 3.8)
   }
 
   # ------------------------------------------------------------
-  # 2) Specialist Dimensions (Lollipop)
+  # 2) Specialist Dimensions (Lollipop) - Enhanced
   # ------------------------------------------------------------
   if (file.exists(file.path(data_dir, "alignment_specialists.csv"))) {
     spec <- .safe_read_csv(file.path(data_dir, "alignment_specialists.csv"))
@@ -103,24 +112,44 @@ for (dataset in datasets) {
       bar_data$label <- factor(bar_data$label, levels = bar_data$label)
 
       p <- ggplot(bar_data, aes(x = label, y = corr)) +
-        geom_segment(aes(xend = label, y = 0, yend = corr),
-                     color = CD_PAL$gray, linewidth = 0.9) +
-        geom_point(
-          size = CD_STYLE$pt_main + 0.6,
-          shape = 21, stroke = 0.9,
-          color = CD_PAL$navy, fill = CD_PAL$blue
+        geom_segment(
+          aes(xend = label, y = 0, yend = corr),
+          color = CD_PAL$gray, 
+          linewidth = 1.2
         ) +
-        scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2), expand = c(0, 0.04)) +
-        labs(x = "Dimension:Concept Mapping", y = "|Spearman Correlation|") +
+        geom_point(
+          aes(fill = corr),
+          size = CD_STYLE$pt_big,
+          shape = 21, 
+          stroke = 1.0,
+          color = CD_PAL$dark
+        ) +
+        scale_fill_gradient(
+          low = CD_PAL$teal, 
+          high = CD_PAL$blue,
+          name = "|Corr|"
+        ) +
+        scale_y_continuous(
+          limits = c(0, 1), 
+          breaks = seq(0, 1, 0.2), 
+          expand = c(0, 0.05)
+        ) +
+        labs(
+          x = "Dimension:Concept Mapping", 
+          y = "|Spearman Correlation|"
+        ) +
         theme_cd_pub() +
-        theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+        theme(
+          axis.text.x = element_text(angle = 50, hjust = 1, vjust = 1, size = 9),
+          legend.position = "right"
+        )
 
-      save_pdf(file.path(out_dir, "alignment_specialist_dims.pdf"), p, w = 6.8, h = 3.2)
+      save_pdf(file.path(out_dir, "alignment_specialist_dims.pdf"), p, w = 7.5, h = 4.0)
     }
   }
 
   # ------------------------------------------------------------
-  # 3) MI Matrix (Heatmap)
+  # 3) MI Matrix (Heatmap) - Enhanced
   # ------------------------------------------------------------
   if (file.exists(file.path(data_dir, "cmig_pairs.csv"))) {
     pairs <- .safe_read_csv(file.path(data_dir, "cmig_pairs.csv"))
@@ -148,28 +177,34 @@ for (dataset in datasets) {
       colnames(M_long) <- c("Dim_i", "Dim_j", "MI")
 
       p <- ggplot(M_long, aes(x = Dim_j, y = Dim_i, fill = MI)) +
-        geom_tile(color = "white", linewidth = 0.18) +
+        geom_tile(color = "white", linewidth = 0.12) +
         scale_fill_viridis_c(
-          option = "magma", direction = -1,
-          limits = c(0, 0.2), oob = squish, name = "MI"
+          option = "magma", 
+          direction = -1,
+          limits = c(0, 0.2), 
+          oob = squish, 
+          name = "MI",
+          alpha = 0.95
         ) +
-        scale_x_continuous(expand = c(0,0)) +
-        scale_y_continuous(expand = c(0,0)) +
+        scale_x_continuous(expand = c(0, 0)) +
+        scale_y_continuous(expand = c(0, 0)) +
         labs(x = "Latent Dimension", y = "Latent Dimension") +
         theme_cd_pub() +
         theme(
-          legend.position = "bottom",
+          legend.position = "right",
+          legend.key.height = unit(1.2, "cm"),
           axis.text = element_blank(),
-          axis.ticks = element_blank()
+          axis.ticks = element_blank(),
+          panel.grid = element_blank()
         ) +
         coord_fixed()
 
-      save_pdf(file.path(out_dir, "mi_matrix_sorted.pdf"), p, w = 4.6, h = 4.2)
+      save_pdf(file.path(out_dir, "mi_matrix_sorted.pdf"), p, w = 5.2, h = 4.8)
     }
   }
 
   # ------------------------------------------------------------
-  # 4) Combo: Leakage (Bubble + ECDF)  [kept]
+  # 4) Combo: Leakage (Bubble + ECDF) - Enhanced
   # ------------------------------------------------------------
   if (file.exists(file.path(data_dir, "alignment_matrix.csv"))) {
     R_df <- .safe_read_csv(file.path(data_dir, "alignment_matrix.csv"), row.names = 1)
@@ -181,30 +216,63 @@ for (dataset in datasets) {
     mean_corr <- rowMeans(abs(R_mat), na.rm = TRUE)
     df_leak <- data.frame(leakage = leakage, max_corr = max_corr, mean_corr = mean_corr)
 
+    # Bubble plot
     p1 <- ggplot(df_leak, aes(x = leakage, y = max_corr)) +
-      geom_vline(xintercept = 2.5, linetype = "dashed", color = CD_PAL$gray, linewidth = 0.7) +
+      geom_vline(
+        xintercept = 2.5, 
+        linetype = "dashed", 
+        color = CD_PAL$gray, 
+        linewidth = 0.8
+      ) +
       geom_point(
         aes(size = max_corr, fill = mean_corr),
-        shape = 21, color = "white", stroke = 0.35, alpha = 0.9
+        shape = 21, 
+        color = "white", 
+        stroke = 0.5, 
+        alpha = 0.85
       ) +
-      scale_fill_viridis_c(option = "viridis", name = "Mean |Corr|") +
-      scale_size_continuous(range = c(2, 6), guide = "none") +
+      scale_fill_viridis_c(
+        option = "viridis", 
+        name = "Mean\n|Corr|",
+        guide = guide_colorbar(barwidth = 0.8, barheight = 3)
+      ) +
+      scale_size_continuous(range = c(3, 8), guide = "none") +
       labs(x = "Leakage Count", y = "Max |Correlation|") +
       theme_cd_pub() +
       theme(legend.position = "right")
 
+    # ECDF plot
     p2 <- ggplot(df_leak, aes(x = leakage)) +
-      stat_ecdf(geom = "step", color = CD_PAL$blue, linewidth = CD_STYLE$lw_main) +
-      scale_y_continuous(labels = percent) +
+      stat_ecdf(
+        geom = "step", 
+        color = CD_PAL$blue, 
+        linewidth = CD_STYLE$lw_main
+      ) +
+      geom_hline(
+        yintercept = 0.5, 
+        linetype = "dotted", 
+        color = CD_PAL$gray
+      ) +
+      scale_y_continuous(labels = percent_format(accuracy = 1)) +
       labs(x = "Leakage Count", y = "Cumulative Proportion") +
       theme_cd_pub()
 
-    # keep the two supporting single figs
-    save_pdf(file.path(single_dir, "alignment_leakage_bubble.pdf"), p1, w = 4.3, h = 3.2)
-    save_pdf(file.path(single_dir, "alignment_leakage_ecdf.pdf"),   p2, w = 4.0, h = 3.2)
+    # Save individual plots
+    save_pdf(file.path(single_dir, "alignment_leakage_bubble.pdf"), p1, w = 5.0, h = 3.8)
+    save_pdf(file.path(single_dir, "alignment_leakage_ecdf.pdf"), p2, w = 4.5, h = 3.5)
 
-    # combo main fig
-    p_combo <- cowplot::plot_grid(p1, p2, ncol = 2, rel_widths = c(1.25, 1), align = "h")
-    save_pdf(file.path(out_dir, "combo_alignment_leakage.pdf"), p_combo, w = 8.8, h = 3.2)
+    # Combo
+    p_combo <- cowplot::plot_grid(
+      p1, p2, 
+      ncol = 2, 
+      rel_widths = c(1.2, 1), 
+      align = "h",
+      labels = c("A", "B"),
+      label_size = 14,
+      label_fontface = "bold"
+    )
+    save_pdf(file.path(out_dir, "combo_alignment_leakage.pdf"), p_combo, w = 10.0, h = 4.0)
   }
 }
+
+cat("\n[Exp1] Completed all datasets\n")
