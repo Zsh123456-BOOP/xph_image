@@ -45,35 +45,13 @@ from torch.utils.data import DataLoader
 
 from dataset import CDDataset, collate_fn
 from model import CognitiveDiagnosisModel
-from utils import build_graph, evaluate
+from utils import build_graph, evaluate, set_pub_style, COLORS
 
 
 # -----------------------------
 # Plot style (white, publication)
 # -----------------------------
-def set_pub_style():
-    plt.rcParams.update({
-        "figure.facecolor": "white",
-        "axes.facecolor": "white",
-        "savefig.facecolor": "white",
-        "font.family": "sans-serif",
-        "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
-        "axes.edgecolor": "#333333",
-        "axes.labelcolor": "#333333",
-        "xtick.color": "#333333",
-        "ytick.color": "#333333",
-        "text.color": "#333333",
-        "axes.linewidth": 1.0,
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "grid.color": "#E0E0E0",
-        "grid.linestyle": "--",
-        "grid.linewidth": 0.8,
-        "legend.frameon": False,
-        "figure.dpi": 220,
-        "savefig.bbox": "tight",
-        "savefig.pad_inches": 0.08
-    })
+
 
 
 def savefig(path: str):
@@ -381,24 +359,30 @@ def exp_qnoise_curve(args, model, graphs, test_df, device) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     df.to_csv(os.path.join(args.out_dir, "qnoise_curve.csv"), index=False)
 
+    plot_qnoise_curve_single(df, os.path.join(args.out_dir, "qnoise_curve.png"))
+    return df
+
+
+def plot_qnoise_curve_single(df: pd.DataFrame, out_path: str):
     # 单图（保留）
     plt.figure(figsize=(7.0, 4.8))
     ax = plt.gca()
     for mode in ["missing", "false"]:
         sub = df[df["mode"] == mode].sort_values("rho")
-        ax.plot(sub["rho"], sub["auc"], marker="o", label=mode)
+        c = COLORS['orange'] if mode == "missing" else COLORS['red']
+        ax.plot(sub["rho"].to_numpy(), sub["auc"].to_numpy(), marker="o", label=mode, color=c)
     ax.set_xlabel("Q-noise rate ρ")
     ax.set_ylabel("Test AUC")
     ax.set_title("Q-noise Robustness (inference-time cpt_seq corruption)")
     ax.grid(True, alpha=0.6)
     ax.yaxis.set_major_formatter(FormatStrFormatter('%.4f'))
 
-    ymin, ymax = df["auc"].min(), df["auc"].max()
-    pad = max(1e-4, (ymax - ymin) * 0.25)
-    ax.set_ylim(ymin - pad, ymax + pad)
+    if not df.empty:
+        ymin, ymax = df["auc"].min(), df["auc"].max()
+        pad = max(1e-4, (ymax - ymin) * 0.25)
+        ax.set_ylim(ymin - pad, ymax + pad)
     ax.legend()
-    savefig(os.path.join(args.out_dir, "qnoise_curve.png"))
-    return df
+    savefig(out_path)
 
 
 # -----------------------------
@@ -423,22 +407,27 @@ def exp_qnoise_hard_false_curve(args, model, graphs, test_df, device, cpt_final)
     df = pd.DataFrame(rows)
     df.to_csv(os.path.join(args.out_dir, "qnoise_hard_curve.csv"), index=False)
 
+    plot_qnoise_hard_curve_single(df, os.path.join(args.out_dir, "qnoise_hard_curve.png"))
+    return df
+
+
+def plot_qnoise_hard_curve_single(df: pd.DataFrame, out_path: str):
     # 单图（保留）
     plt.figure(figsize=(7.0, 4.8))
     ax = plt.gca()
-    ax.plot(df["rho"], df["auc"], marker="o", label="false_hard")
+    ax.plot(df["rho"].to_numpy(), df["auc"].to_numpy(), marker="o", label="false_hard", color=COLORS['purple'])
     ax.set_xlabel("Q-noise rate ρ")
     ax.set_ylabel("Test AUC")
     ax.set_title("Hard Q-noise Robustness (semantic hard false concepts)")
     ax.grid(True, alpha=0.6)
     ax.yaxis.set_major_formatter(FormatStrFormatter('%.4f'))
 
-    ymin, ymax = df["auc"].min(), df["auc"].max()
-    pad = max(1e-4, (ymax - ymin) * 0.25)
-    ax.set_ylim(ymin - pad, ymax + pad)
+    if not df.empty:
+        ymin, ymax = df["auc"].min(), df["auc"].max()
+        pad = max(1e-4, (ymax - ymin) * 0.25)
+        ax.set_ylim(ymin - pad, ymax + pad)
     ax.legend()
-    savefig(os.path.join(args.out_dir, "qnoise_hard_curve.png"))
-    return df
+    savefig(out_path)
 
 
 # -----------------------------
@@ -457,9 +446,11 @@ def plot_qnoise_combo(args, df_q: pd.DataFrame, df_hard: pd.DataFrame):
     ax1, ax2 = axes
 
     # (a) missing/false
+    first_mode_handled = False
     for mode in ["missing", "false"]:
         sub = df_q[df_q["mode"] == mode].sort_values("rho")
-        ax1.plot(sub["rho"], sub["auc"], marker="o", label=mode)
+        c = COLORS['orange'] if mode == "missing" else COLORS['red']
+        ax1.plot(sub["rho"].to_numpy(), sub["auc"].to_numpy(), marker="o", label=mode, color=c)
         # annotate endpoints
         if len(sub) > 0:
             a0 = float(sub.iloc[0]["auc"])
@@ -479,7 +470,7 @@ def plot_qnoise_combo(args, df_q: pd.DataFrame, df_hard: pd.DataFrame):
 
     # (b) hard false
     sub = df_hard.sort_values("rho")
-    ax2.plot(sub["rho"], sub["auc"], marker="o", label="false_hard")
+    ax2.plot(sub["rho"].to_numpy(), sub["auc"].to_numpy(), marker="o", label="false_hard", color=COLORS['purple'])
     if len(sub) > 0:
         a0 = float(sub.iloc[0]["auc"])
         aT = float(sub.iloc[-1]["auc"])

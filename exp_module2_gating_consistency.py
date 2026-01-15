@@ -33,32 +33,13 @@ from torch.utils.data import DataLoader
 
 from dataset import CDDataset, collate_fn
 from model import CognitiveDiagnosisModel
-from utils import build_graph, train_epoch, evaluate, EarlyStopping
+from utils import build_graph, train_epoch, evaluate, EarlyStopping, set_pub_style, COLORS
 
 
 # -----------------------------
 # Style (Publication-quality, white background)
 # -----------------------------
-def set_pub_style():
-    plt.rcParams.update({
-        "font.family": "sans-serif",
-        "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
-        "figure.facecolor": "white",
-        "axes.facecolor": "white",
-        "axes.edgecolor": "#333333",
-        "axes.linewidth": 1.0,
-        "axes.grid": True,
-        "grid.color": "#E6E6E6",
-        "grid.linestyle": "--",
-        "grid.linewidth": 0.8,
-        "xtick.color": "#333333",
-        "ytick.color": "#333333",
-        "text.color": "#333333",
-        "legend.frameon": False,
-        "savefig.bbox": "tight",
-        "savefig.pad_inches": 0.12,
-        "figure.dpi": 300,
-    })
+
 
 
 def savefig(path: str):
@@ -237,13 +218,13 @@ def plot_robust_curve_combo(df: pd.DataFrame, out_path: str):
     auc = df["auc"].to_numpy()
     acc = df["accuracy"].to_numpy()
 
-    ax1.plot(x, auc, marker="o", linewidth=2.0, label="AUC")
+    ax1.plot(x, auc, marker="o", linewidth=2.0, label="AUC", color=COLORS['blue'])
     ax1.set_xlabel("Graph edge dropout rate")
     ax1.set_ylabel("Test AUC")
     ax1.yaxis.set_major_locator(MaxNLocator(6))
 
     ax2 = ax1.twinx()
-    ax2.plot(x, acc, marker="s", linewidth=2.0, linestyle="--", alpha=0.85, label="Accuracy")
+    ax2.plot(x, acc, marker="s", linewidth=2.0, linestyle="--", alpha=0.85, label="Accuracy", color=COLORS['orange'])
     ax2.set_ylabel("Test Accuracy")
     ax2.yaxis.set_major_locator(MaxNLocator(6))
 
@@ -363,13 +344,13 @@ def plot_pareto_combo(df: pd.DataFrame, out_path: str):
     x = df_plot["D_view_mean"].to_numpy()
     y = df_plot["error"].to_numpy()
 
-    ax1.plot(x, y, linestyle="--", color="#777777", linewidth=1.6, alpha=0.8, label="Trajectory")
+    ax1.plot(x, y, linestyle="--", color=COLORS['gray'], linewidth=1.6, alpha=0.8, label="Trajectory")
 
     # scatter with lambda colormap
     sc = ax1.scatter(
         x, y,
         c=df_plot["lambda_contrastive"].to_numpy(),
-        cmap="viridis",
+        cmap=COLORS['cmap'],
         s=70,
         edgecolors="#222222",
         linewidths=0.6,
@@ -381,19 +362,19 @@ def plot_pareto_combo(df: pd.DataFrame, out_path: str):
     ax1.plot(
         df_front["D_view_mean"].to_numpy(),
         df_front["error"].to_numpy(),
-        color="#1f77b4",
+        color=COLORS['blue'],
         linewidth=2.6,
         label="Pareto front",
         zorder=4
     )
 
     # mark lambda-star
-    ax1.scatter([x[idx_star]], [y[idx_star]], s=160, marker="*", color="#d62728", edgecolors="#222222",
+    ax1.scatter([x[idx_star]], [y[idx_star]], s=160, marker="*", color=COLORS['red'], edgecolors="#222222",
                 linewidths=0.8, zorder=6, label=r"$\lambda^\star$")
 
     # mark lambda=0
     if idx_l0 is not None:
-        ax1.scatter([x[idx_l0]], [y[idx_l0]], s=120, marker="D", color="#ff7f0e", edgecolors="#222222",
+        ax1.scatter([x[idx_l0]], [y[idx_l0]], s=120, marker="D", color=COLORS['orange'], edgecolors="#222222",
                     linewidths=0.8, zorder=6, label=r"$\lambda=0$")
 
     ax1.set_xlabel(r"View distance $D_{\mathrm{view}}$ (↓ better consistency)")
@@ -411,14 +392,14 @@ def plot_pareto_combo(df: pd.DataFrame, out_path: str):
             df_plot["D_exer"].to_numpy(),
             df_plot["D_cpt"].to_numpy(),
             c=df_plot["lambda_contrastive"].to_numpy(),
-            cmap="viridis",
+            cmap=COLORS['cmap'],
             s=70,
             edgecolors="#222222",
             linewidths=0.6,
             zorder=3
         )
         ax2.scatter([df_plot.loc[idx_star, "D_exer"]], [df_plot.loc[idx_star, "D_cpt"]],
-                    s=160, marker="*", color="#d62728", edgecolors="#222222", linewidths=0.8, zorder=6)
+                    s=160, marker="*", color=COLORS['red'], edgecolors="#222222", linewidths=0.8, zorder=6)
 
         ax2.set_xlabel(r"$D_{\mathrm{exer}}$ (exercise-view)")
         ax2.set_ylabel(r"$D_{\mathrm{cpt}}$ (concept-view)")
@@ -427,7 +408,7 @@ def plot_pareto_combo(df: pd.DataFrame, out_path: str):
         # 参考线 y=x，帮助读“哪个视图更不一致”
         mn = float(min(df_plot["D_exer"].min(), df_plot["D_cpt"].min()))
         mx = float(max(df_plot["D_exer"].max(), df_plot["D_cpt"].max()))
-        ax2.plot([mn, mx], [mn, mx], linestyle="--", color="#777777", linewidth=1.2, alpha=0.8)
+        ax2.plot([mn, mx], [mn, mx], linestyle="--", color=COLORS['gray'], linewidth=1.2, alpha=0.8)
     else:
         ax2.plot(df_plot["lambda_contrastive"], df_plot["test_auc"], marker="o", linewidth=2.0)
         ax2.set_xlabel(r"$\lambda$")

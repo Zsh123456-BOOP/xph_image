@@ -1,14 +1,53 @@
 import os
-
-import torch
-import torch.nn.functional as F
-import numpy as np
-from scipy.sparse import coo_matrix
-from tqdm import tqdm
 import copy
 import pickle
+import numpy as np
+import torch
+import torch.nn.functional as F
+from scipy.sparse import coo_matrix
+from tqdm import tqdm
 from sklearn.metrics import roc_auc_score, precision_score, recall_score, f1_score, confusion_matrix, mean_squared_error
 
+import matplotlib.pyplot as plt
+from matplotlib import cm
+
+# -----------------------------
+# Shared Plotting Style
+# -----------------------------
+COLORS = {
+    'blue': '#1f77b4',
+    'orange': '#ff7f0e',
+    'green': '#2ca02c',
+    'red': '#d62728',
+    'purple': '#9467bd',
+    'brown': '#8c564b',
+    'pink': '#e377c2',
+    'gray': '#7f7f7f',
+    'cyan': '#17becf',
+    'cmap': 'viridis'
+}
+
+def set_pub_style():
+    """Sets a publication-quality style for matplotlib plots."""
+    plt.rcParams.update({
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+        "figure.facecolor": "white",
+        "axes.facecolor": "white",
+        "axes.edgecolor": "#333333",
+        "axes.linewidth": 1.0,
+        "axes.grid": True,
+        "grid.color": "#E6E6E6",
+        "grid.linestyle": "--",
+        "grid.linewidth": 0.8,
+        "xtick.color": "#333333",
+        "ytick.color": "#333333",
+        "text.color": "#333333",
+        "legend.frameon": False,
+        "savefig.bbox": "tight",
+        "savefig.pad_inches": 0.12,
+        "figure.dpi": 300,
+    })
 
 def build_graph(data_df, num_students, num_items, correct=True, item_type='exercise', concept_offset=0,
                 graph_dir='./graphs'):

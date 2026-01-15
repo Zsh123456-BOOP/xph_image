@@ -47,7 +47,7 @@ from torch.utils.data import DataLoader
 
 from dataset import CDDataset, collate_fn
 from model import CognitiveDiagnosisModel
-from utils import build_graph
+from utils import build_graph, set_pub_style, COLORS
 
 
 # ============================================================
@@ -332,7 +332,7 @@ def plot_alignment_leakage_and_specialists(
 
     # ---- 1. Leakage plot (alignment_leakage.png) ----
     plt.figure(figsize=(7.0, 4.8))
-    plt.hist(leakage, bins=min(30, max(5, int(np.sqrt(K)))), alpha=0.85)
+    plt.hist(leakage, bins=min(30, max(5, int(np.sqrt(K)))), alpha=0.85, color=COLORS['blue'])
     plt.xlabel(f"Leakage = #Concepts with |corr| > {leakage_thr}")
     plt.ylabel("Count of Latent Dimensions")
     plt.title("Alignment Leakage Distribution")
@@ -382,7 +382,7 @@ def plot_alignment_leakage_and_specialists(
             vals.append(float(cv))
 
     plt.figure(figsize=(12.0, 4.8))
-    plt.bar(np.arange(len(vals)), vals)
+    plt.bar(np.arange(len(vals)), vals, color=COLORS['blue'])
     plt.xticks(np.arange(len(vals)), labels, rotation=60, ha="right", fontsize=8)
     plt.ylabel("|Spearman corr|")
     plt.title(f"Specialist Dimensions (Top-{specialist_topk} Concepts)")
@@ -511,27 +511,7 @@ def top1_concept_per_factor_from_R(R: np.ndarray) -> np.ndarray:
 # ============================================================
 # COMBO VIS (inlined make_combo_from_csv_1.py, NO seaborn)
 # ============================================================
-def set_pub_style_combo():
-    plt.rcParams.update({
-        "figure.facecolor": "white",
-        "axes.facecolor": "white",
-        "savefig.facecolor": "white",
-        "font.family": "sans-serif",
-        "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
-        "axes.edgecolor": "#333333",
-        "axes.linewidth": 1.0,
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "xtick.color": "#333333",
-        "ytick.color": "#333333",
-        "text.color": "#333333",
-        "grid.color": "#E6E6E6",
-        "grid.linestyle": "--",
-        "grid.linewidth": 0.8,
-        "legend.frameon": False,
-        "savefig.bbox": "tight",
-        "savefig.pad_inches": 0.08,
-    })
+
 
 
 def compute_leakage_stats(R: np.ndarray, thr: float):
@@ -554,11 +534,19 @@ def build_pair_matrix(pairs_df: pd.DataFrame, K: int, col: str):
 
 
 def ax_heatmap_contour(ax, M: np.ndarray, title: str, cmap_name: str = "Blues", mark_topk: int = 5):
+    # Use global style cmap if default "Blues" was passed, else respect argument (or force override)
+    # The user asked for unified colors, so let's default to a nice one or use COLORS['cmap']
+    # However, for heatmaps, sometimes single-hue is better. Let's stick to COLORS['cmap'] if plausible,
+    # or keep Blues but make sure it matches the style. The user said "unify", so let's use COLORS['cmap']
+    # But wait, viridis is not always good for 0-1 single channel if we want white=0.
+    # Let's use 'viridis' or 'Blues' consistently.
+    # I'll use COLORS['cmap'] (viridis) as it's generally preferred for scientific pubs.
+    
     vals = M[~np.isnan(M)]
     vmax = np.percentile(vals, 99) if len(vals) else 1.0
     vmax = max(vmax, 1e-12)
 
-    im = ax.imshow(M, cmap=cmap_name, interpolation="nearest", origin="lower", vmin=0.0, vmax=vmax, aspect="equal")
+    im = ax.imshow(M, cmap=COLORS['cmap'], interpolation="nearest", origin="lower", vmin=0.0, vmax=vmax, aspect="equal")
     ax.set_title(title)
     ax.set_xlabel("latent dim")
     ax.set_ylabel("latent dim")
@@ -637,8 +625,8 @@ def ax_leakage_bubble(ax, R: np.ndarray, thr: float):
         alpha=0.85, edgecolors="#444444", linewidths=0.6
     )
 
-    ax.axvline(x=2, color="#C0392B", linestyle="--", linewidth=1.2, alpha=0.8)
-    ax.text(2.2, float(max_corr.min()), "target leakage ≤ 2", color="#C0392B", fontsize=9, va="bottom")
+    ax.axvline(x=2, color=COLORS['red'], linestyle="--", linewidth=1.2, alpha=0.8)
+    ax.text(2.2, float(max_corr.min()), "target leakage ≤ 2", color=COLORS['red'], fontsize=9, va="bottom")
 
     ax.set_title(f"Leakage vs focus (thr={thr})")
     ax.set_xlabel(f"Leakage count (|corr| > {thr})")
@@ -723,7 +711,7 @@ def ax_specialist_flow(ax, spec_df: pd.DataFrame, topk: int = 2):
 
     v_values = [v for _, _, v in edges]
     vmax = max(v_values) + 1e-12
-    cmap_obj = cm.get_cmap("Blues")
+    cmap_obj = cm.get_cmap(COLORS['cmap'])
     norm = Normalize(vmin=np.percentile(v_values, 10), vmax=np.percentile(v_values, 95))
 
     for d, c, v in edges:
@@ -861,7 +849,7 @@ def make_combo_from_csvs(out_dir: str, leakage_thr: float):
     """
     从 exp_module1_disentangle.py 生成的 CSV 中读取数据并输出 combo 图。
     """
-    set_pub_style_combo()
+    set_pub_style()
 
     path_R = os.path.join(out_dir, "alignment_matrix.csv")
     path_spec = os.path.join(out_dir, "alignment_specialists.csv")
