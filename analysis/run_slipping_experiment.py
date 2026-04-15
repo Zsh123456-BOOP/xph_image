@@ -1,9 +1,15 @@
 import argparse
+import os
 from pathlib import Path
+import sys
 
 import numpy as np
 import pandas as pd
 import torch
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 from analysis.analysis_utils import (
     DEFAULT_MODEL_CONFIG,

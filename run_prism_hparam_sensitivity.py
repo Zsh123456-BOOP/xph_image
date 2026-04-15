@@ -85,7 +85,8 @@ def build_command(job, args):
     dataset_dir = Path(args.data_root) / dataset
     cmd = [
         sys.executable,
-        "analysis/run_train_eval_job.py",
+        "-m",
+        "analysis.run_train_eval_job",
         "--dataset",
         dataset,
         "--train_file",

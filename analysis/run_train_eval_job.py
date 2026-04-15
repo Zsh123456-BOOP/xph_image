@@ -1,10 +1,16 @@
 import argparse
 import json
+import os
 from datetime import datetime
 from pathlib import Path
+import sys
 
 import numpy as np
 import torch
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 from main import prepare_data, test, train
 
