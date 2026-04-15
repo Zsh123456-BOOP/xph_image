@@ -127,7 +127,9 @@ def load_baseline_slipping_summary(strict_dir, datasets, baseline_label):
 
 def load_baseline_case_reference(strict_dir, datasets):
     strict_dir = Path(strict_dir)
-    path = strict_dir / "case_study_compare_table.csv"
+    all_cases_path = strict_dir / "case_study_compare_all_cases.csv"
+    table_path = strict_dir / "case_study_compare_table.csv"
+    path = all_cases_path if all_cases_path.exists() else table_path
     frame = pd.read_csv(path)
     frame = frame[frame["dataset"].isin(datasets)].copy()
     if "representative_rank" in frame.columns:
