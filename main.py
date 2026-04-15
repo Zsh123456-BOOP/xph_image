@@ -69,7 +69,10 @@ def prepare_data(args, device):
     train_df = pd.read_csv(args.train_file)
     valid_df = pd.read_csv(args.valid_file)
     test_df = pd.read_csv(args.test_file)
-    all_df = pd.concat([train_df, valid_df, test_df])
+    train_df_raw = train_df.copy()
+    valid_df_raw = valid_df.copy()
+    test_df_raw = test_df.copy()
+    all_df = pd.concat([train_df, valid_df, test_df], ignore_index=True)
 
     # 1. 收集所有唯一ID (原始数据中的ID可能不连续)
     print("Collecting unique IDs...")
@@ -91,6 +94,9 @@ def prepare_data(args, device):
     student_id_map = {old_id: new_id for new_id, old_id in enumerate(student_ids)}
     exercise_id_map = {old_id: new_id for new_id, old_id in enumerate(exercise_ids)}
     concept_id_map = {old_id: new_id for new_id, old_id in enumerate(concept_ids)}
+    reverse_student_id_map = {new_id: old_id for old_id, new_id in student_id_map.items()}
+    reverse_exercise_id_map = {new_id: old_id for old_id, new_id in exercise_id_map.items()}
+    reverse_concept_id_map = {new_id: old_id for old_id, new_id in concept_id_map.items()}
     
     # 3. 统计映射后的数量（这些数量对应连续ID的范围）
     num_students = len(student_id_map)  # 映射后: 0 ~ num_students-1
@@ -127,6 +133,18 @@ def prepare_data(args, device):
         df['exer_id'] = df['exer_id'].map(exercise_id_map)
         df['cpt_seq'] = df['cpt_seq'].apply(map_concepts)
 
+    q_matrix = np.zeros((num_exercises, num_concepts), dtype=np.float32)
+    mapped_all_df = pd.concat([train_df, valid_df, test_df], ignore_index=True)
+    for row in mapped_all_df.itertuples(index=False):
+        exer_id = int(row.exer_id)
+        cpt_seq = row.cpt_seq
+        if isinstance(cpt_seq, str):
+            cpts = [int(c) for c in cpt_seq.split(',') if str(c).strip() != ""]
+        else:
+            cpts = [int(cpt_seq)]
+        for cpt_id in cpts:
+            q_matrix[exer_id, cpt_id] = 1.0
+
     # 5. 构建图 (Build Graphs)
     print('Building graphs or loading from file...')
     print(f'Graph directory: {args.graph_dir}')
@@ -162,7 +180,28 @@ def prepare_data(args, device):
         'num_concepts': num_concepts,
         'concept_offset': concept_offset,
         'adj_graphs': (adj_correct_se, adj_wrong_se, adj_correct_sc, adj_wrong_sc),
-        'loaders': (train_loader, valid_loader, test_loader)
+        'loaders': (train_loader, valid_loader, test_loader),
+        'raw_frames': {
+            'train': train_df_raw.reset_index(drop=True),
+            'valid': valid_df_raw.reset_index(drop=True),
+            'test': test_df_raw.reset_index(drop=True),
+        },
+        'mapped_frames': {
+            'train': train_df.reset_index(drop=True),
+            'valid': valid_df.reset_index(drop=True),
+            'test': test_df.reset_index(drop=True),
+        },
+        'id_maps': {
+            'student': student_id_map,
+            'exercise': exercise_id_map,
+            'concept': concept_id_map,
+        },
+        'reverse_id_maps': {
+            'student': reverse_student_id_map,
+            'exercise': reverse_exercise_id_map,
+            'concept': reverse_concept_id_map,
+        },
+        'q_matrix': torch.from_numpy(q_matrix),
     }
 
     return data_bundle
