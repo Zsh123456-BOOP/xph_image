@@ -20,6 +20,7 @@ from analysis.comparison_utils import (
     build_experiment_verdicts,
     build_slipping_gain_summary_table,
     build_slipping_verdict_table,
+    ensure_case_metrics,
     find_matching_file,
     load_labeled_csv,
     merge_case_study_frames,
@@ -164,6 +165,115 @@ def load_baseline_case_reference(strict_dir, datasets):
     frame["exer_id"] = frame["exer_id"].astype(str)
     frame["cpt_seq"] = frame["cpt_seq"].astype(str)
     return frame
+
+
+def merge_case_results_with_fallback(prism_cases, baseline_cases, prism_label="Prism-CD", baseline_label="NeuralCD"):
+    prism_cases = ensure_case_metrics(prism_cases)
+    baseline_cases = ensure_case_metrics(baseline_cases)
+    metric_cols = [
+        "hist_avg_rate",
+        "item_p_pred",
+        "concept_proxy_pred",
+        "item_drop",
+        "concept_drop",
+        "concept_drop_ratio",
+        "stable_concept_drop_ratio",
+        "decoupling_gap",
+    ]
+    rows = []
+    for dataset in sorted(set(prism_cases["dataset"]).intersection(set(baseline_cases["dataset"]))):
+        prism_subset = prism_cases[prism_cases["dataset"] == dataset].copy().reset_index(drop=True)
+        baseline_subset = baseline_cases[baseline_cases["dataset"] == dataset].copy().reset_index(drop=True)
+        if prism_subset.empty or baseline_subset.empty:
+            continue
+
+        prism_subset["stu_id"] = prism_subset["stu_id"].astype(str)
+        prism_subset["exer_id"] = prism_subset["exer_id"].astype(str)
+        prism_subset["cpt_seq"] = prism_subset["cpt_seq"].astype(str)
+        baseline_subset["stu_id"] = baseline_subset["stu_id"].astype(str)
+        baseline_subset["exer_id"] = baseline_subset["exer_id"].astype(str)
+        baseline_subset["cpt_seq"] = baseline_subset["cpt_seq"].astype(str)
+
+        prism_pref = prism_subset[["dataset", "case_rank", "stu_id", "exer_id", "cpt_seq", *metric_cols]].rename(
+            columns={
+                "case_rank": "prism_case_rank",
+                "hist_avg_rate": "prism_hist_avg_rate",
+                "item_p_pred": "prism_item_p_pred",
+                "concept_proxy_pred": "prism_concept_proxy_pred",
+                "item_drop": "prism_item_drop",
+                "concept_drop": "prism_concept_drop",
+                "concept_drop_ratio": "prism_concept_drop_ratio",
+                "stable_concept_drop_ratio": "prism_stable_concept_drop_ratio",
+                "decoupling_gap": "prism_decoupling_gap",
+            }
+        )
+        baseline_pref = baseline_subset[["dataset", "case_rank", "stu_id", "exer_id", "cpt_seq", *metric_cols]].rename(
+            columns={
+                "case_rank": "baseline_case_rank",
+                "hist_avg_rate": "baseline_hist_avg_rate",
+                "item_p_pred": "baseline_item_p_pred",
+                "concept_proxy_pred": "baseline_concept_proxy_pred",
+                "item_drop": "baseline_item_drop",
+                "concept_drop": "baseline_concept_drop",
+                "concept_drop_ratio": "baseline_concept_drop_ratio",
+                "stable_concept_drop_ratio": "baseline_stable_concept_drop_ratio",
+                "decoupling_gap": "baseline_decoupling_gap",
+            }
+        )
+
+        exact = prism_pref.merge(
+            baseline_pref,
+            on=["dataset", "stu_id", "exer_id", "cpt_seq"],
+            how="inner",
+        ).sort_values(["prism_case_rank", "baseline_case_rank"]).reset_index(drop=True)
+        if not exact.empty:
+            exact["case_rank"] = np.arange(1, len(exact) + 1)
+            exact["prism_label"] = prism_label
+            exact["baseline_label"] = baseline_label
+            exact["reference_mode"] = "exact_pair"
+            rows.append(exact)
+            continue
+
+        prism_ranked = prism_pref.sort_values("prism_case_rank").reset_index(drop=True)
+        baseline_ranked = baseline_pref.sort_values("baseline_case_rank").reset_index(drop=True)
+        limit = min(len(prism_ranked), len(baseline_ranked))
+        if limit == 0:
+            continue
+        paired = pd.DataFrame(
+            {
+                "dataset": prism_ranked.loc[: limit - 1, "dataset"].tolist(),
+                "case_rank": list(range(1, limit + 1)),
+                "stu_id": prism_ranked.loc[: limit - 1, "stu_id"].tolist(),
+                "exer_id": prism_ranked.loc[: limit - 1, "exer_id"].tolist(),
+                "cpt_seq": prism_ranked.loc[: limit - 1, "cpt_seq"].tolist(),
+                "prism_case_rank": prism_ranked.loc[: limit - 1, "prism_case_rank"].tolist(),
+                "baseline_case_rank": baseline_ranked.loc[: limit - 1, "baseline_case_rank"].tolist(),
+                "prism_hist_avg_rate": prism_ranked.loc[: limit - 1, "prism_hist_avg_rate"].tolist(),
+                "prism_item_p_pred": prism_ranked.loc[: limit - 1, "prism_item_p_pred"].tolist(),
+                "prism_concept_proxy_pred": prism_ranked.loc[: limit - 1, "prism_concept_proxy_pred"].tolist(),
+                "prism_item_drop": prism_ranked.loc[: limit - 1, "prism_item_drop"].tolist(),
+                "prism_concept_drop": prism_ranked.loc[: limit - 1, "prism_concept_drop"].tolist(),
+                "prism_concept_drop_ratio": prism_ranked.loc[: limit - 1, "prism_concept_drop_ratio"].tolist(),
+                "prism_stable_concept_drop_ratio": prism_ranked.loc[: limit - 1, "prism_stable_concept_drop_ratio"].tolist(),
+                "prism_decoupling_gap": prism_ranked.loc[: limit - 1, "prism_decoupling_gap"].tolist(),
+                "baseline_hist_avg_rate": baseline_ranked.loc[: limit - 1, "baseline_hist_avg_rate"].tolist(),
+                "baseline_item_p_pred": baseline_ranked.loc[: limit - 1, "baseline_item_p_pred"].tolist(),
+                "baseline_concept_proxy_pred": baseline_ranked.loc[: limit - 1, "baseline_concept_proxy_pred"].tolist(),
+                "baseline_item_drop": baseline_ranked.loc[: limit - 1, "baseline_item_drop"].tolist(),
+                "baseline_concept_drop": baseline_ranked.loc[: limit - 1, "baseline_concept_drop"].tolist(),
+                "baseline_concept_drop_ratio": baseline_ranked.loc[: limit - 1, "baseline_concept_drop_ratio"].tolist(),
+                "baseline_stable_concept_drop_ratio": baseline_ranked.loc[: limit - 1, "baseline_stable_concept_drop_ratio"].tolist(),
+                "baseline_decoupling_gap": baseline_ranked.loc[: limit - 1, "baseline_decoupling_gap"].tolist(),
+            }
+        )
+        paired["prism_label"] = prism_label
+        paired["baseline_label"] = baseline_label
+        paired["reference_mode"] = "rank_fallback"
+        rows.append(paired)
+
+    if not rows:
+        raise RuntimeError("No case-study rows could be aligned or paired across models.")
+    return pd.concat(rows, ignore_index=True).sort_values(["dataset", "case_rank"]).reset_index(drop=True)
 
 
 def aggregate_slipping_for_plot(frame):
@@ -516,7 +626,7 @@ def main():
 
     prism_cases = load_prism_case_results(args.prism_output_dir, datasets)
     baseline_cases = load_baseline_case_reference(args.baseline_strict_dir, datasets)
-    merged_cases = merge_case_study_frames(
+    merged_cases = merge_case_results_with_fallback(
         prism_cases,
         baseline_cases,
         prism_label=args.prism_label,

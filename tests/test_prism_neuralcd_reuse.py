@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from analysis.run_prism_neuralcd_comparison import (
+    merge_case_results_with_fallback,
     load_baseline_case_reference,
     load_baseline_slipping_summary,
 )
@@ -101,6 +102,59 @@ class PrismNeuralCDReuseTests(unittest.TestCase):
         )
         self.assertEqual(baseline.loc[0, "stu_id"], "7")
         self.assertAlmostEqual(baseline.loc[0, "stable_concept_drop_ratio"], 2.0, places=6)
+
+    def test_merge_case_results_with_fallback_uses_rank_when_no_exact_overlap(self):
+        prism_cases = pd.DataFrame(
+            [
+                {
+                    "dataset": "junyi",
+                    "case_rank": 1,
+                    "stu_id": "1",
+                    "exer_id": "101",
+                    "cpt_seq": "2",
+                    "hist_avg_rate": 0.9,
+                    "item_p_pred": 0.6,
+                    "concept_proxy_pred": 0.8,
+                    "item_drop": 0.3,
+                    "concept_drop": 0.1,
+                    "concept_drop_ratio": 0.3333,
+                    "stable_concept_drop_ratio": 0.3333,
+                    "decoupling_gap": 0.2,
+                }
+            ]
+        )
+        baseline_cases = pd.DataFrame(
+            [
+                {
+                    "dataset": "junyi",
+                    "case_rank": 1,
+                    "stu_id": "999",
+                    "exer_id": "888",
+                    "cpt_seq": "7",
+                    "hist_avg_rate": 0.9,
+                    "item_p_pred": 0.8,
+                    "concept_proxy_pred": 0.7,
+                    "item_drop": 0.1,
+                    "concept_drop": 0.2,
+                    "concept_drop_ratio": 2.0,
+                    "stable_concept_drop_ratio": 2.0,
+                    "decoupling_gap": -0.1,
+                }
+            ]
+        )
+
+        merged = merge_case_results_with_fallback(
+            prism_cases,
+            baseline_cases,
+            prism_label="Prism-CD",
+            baseline_label="NeuralCD",
+        )
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged.loc[0, "dataset"], "junyi")
+        self.assertEqual(merged.loc[0, "reference_mode"], "rank_fallback")
+        self.assertAlmostEqual(merged.loc[0, "prism_decoupling_gap"], 0.2, places=6)
+        self.assertAlmostEqual(merged.loc[0, "baseline_decoupling_gap"], -0.1, places=6)
 
 
 if __name__ == "__main__":
