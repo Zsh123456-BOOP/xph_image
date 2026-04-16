@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import time
+from collections import defaultdict, deque
 from pathlib import Path
 
 import pandas as pd
@@ -29,9 +30,13 @@ def parse_args():
     parser.add_argument("--job_result_dir", type=str, default="results/hparam_job_results")
     parser.add_argument("--save_root", type=str, default="saved_models/hparam_runs")
     parser.add_argument("--graph_root", type=str, default="graphs_hparam")
+    parser.add_argument("--log_dir", type=str, default="logs/hparam_runs")
     parser.add_argument("--data_root", type=str, default="data")
     parser.add_argument("--skip_existing", type=int, default=1, choices=[0, 1])
     parser.add_argument("--dry_run", type=int, default=0, choices=[0, 1])
+    parser.add_argument("--limit_jobs", type=int, default=0, help="Only launch the first N pending jobs (0 keeps all).")
+    parser.add_argument("--override_epochs", type=int, default=0, help="Override epochs for all launched jobs (0 keeps defaults).")
+    parser.add_argument("--override_patience", type=int, default=0, help="Override patience for all launched jobs (0 keeps defaults).")
     return parser.parse_args()
 
 
@@ -61,7 +66,7 @@ def get_gpu_memory_usage():
 
 def choose_gpu(running_procs, allowed_gpus, memory_threshold_mb, max_concurrent_jobs):
     gpu_load = {gpu_id: 0 for gpu_id in allowed_gpus}
-    for _, _, gpu_id in running_procs:
+    for _, _, gpu_id, _ in running_procs:
         if gpu_id in gpu_load:
             gpu_load[gpu_id] += 1
 
@@ -75,8 +80,17 @@ def choose_gpu(running_procs, allowed_gpus, memory_threshold_mb, max_concurrent_
     return None
 
 
+def apply_job_overrides(config, args):
+    cfg = dict(config)
+    if int(args.override_epochs) > 0:
+        cfg["epochs"] = int(args.override_epochs)
+    if int(args.override_patience) > 0:
+        cfg["patience"] = int(args.override_patience)
+    return cfg
+
+
 def build_command(job, args):
-    cfg = job["config"]
+    cfg = apply_job_overrides(job["config"], args)
     dataset = job["dataset"]
     tag = job["tag"]
     save_dir = Path(args.save_root) / dataset / tag
@@ -85,6 +99,7 @@ def build_command(job, args):
     dataset_dir = Path(args.data_root) / dataset
     cmd = [
         sys.executable,
+        "-u",
         "-m",
         "analysis.run_train_eval_job",
         "--dataset",
@@ -109,6 +124,31 @@ def build_command(job, args):
     for key, value in cfg.items():
         cmd.extend([f"--{key}", str(value)])
     return cmd, output_json
+
+
+def stagger_jobs_by_dataset(jobs):
+    grouped = defaultdict(deque)
+    dataset_order = []
+    for job in jobs:
+        dataset = job["dataset"]
+        if dataset not in grouped:
+            dataset_order.append(dataset)
+        grouped[dataset].append(job)
+
+    staggered = []
+    added = True
+    while added:
+        added = False
+        for dataset in dataset_order:
+            queue = grouped[dataset]
+            if queue:
+                staggered.append(queue.popleft())
+                added = True
+    return staggered
+
+
+def build_log_path(log_dir, dataset, tag):
+    return Path(log_dir) / dataset / f"{tag}.log"
 
 
 def collect_existing_tags(job_result_dir):
@@ -138,6 +178,7 @@ def main():
     hparams = set(parse_list(args.hparams))
     allowed_gpus = [int(v) for v in parse_list(args.allowed_gpus)]
     Path(args.job_result_dir).mkdir(parents=True, exist_ok=True)
+    Path(args.log_dir).mkdir(parents=True, exist_ok=True)
 
     jobs = [
         job
@@ -145,7 +186,9 @@ def main():
         if job["dataset"] in datasets and job["hparam"] in hparams
     ]
     existing_tags = collect_existing_tags(args.job_result_dir) if int(args.skip_existing) else set()
-    pending_jobs = [job for job in jobs if job["tag"] not in existing_tags]
+    pending_jobs = stagger_jobs_by_dataset([job for job in jobs if job["tag"] not in existing_tags])
+    if int(args.limit_jobs) > 0:
+        pending_jobs = pending_jobs[: int(args.limit_jobs)]
 
     print(f"Total sweep jobs: {len(jobs)}")
     print(f"Pending jobs after skip_existing: {len(pending_jobs)}")
@@ -160,9 +203,10 @@ def main():
     running_procs = []
     while pending_jobs or running_procs:
         for proc_info in running_procs[:]:
-            proc, tag, gpu_id = proc_info
+            proc, tag, gpu_id, log_handle = proc_info
             if proc.poll() is not None:
                 print(f"Finished {tag} on GPU {gpu_id} with code {proc.returncode}")
+                log_handle.close()
                 running_procs.remove(proc_info)
 
         while pending_jobs:
@@ -182,9 +226,19 @@ def main():
                 continue
             env = os.environ.copy()
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-            print(f"Launching {job['tag']} on GPU {gpu_id}")
-            proc = subprocess.Popen(cmd, env=env, cwd=os.getcwd())
-            running_procs.append((proc, job["tag"], gpu_id))
+            env["PYTHONUNBUFFERED"] = "1"
+            log_path = build_log_path(args.log_dir, job["dataset"], job["tag"])
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_handle = open(log_path, "a", encoding="utf-8")
+            print(f"Launching {job['tag']} on GPU {gpu_id} -> {log_path}")
+            proc = subprocess.Popen(
+                cmd,
+                env=env,
+                cwd=os.getcwd(),
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+            )
+            running_procs.append((proc, job["tag"], gpu_id, log_handle))
             time.sleep(max(int(args.cooldown_seconds), 0))
 
         if pending_jobs or running_procs:
