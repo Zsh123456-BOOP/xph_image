@@ -20,6 +20,7 @@ from analysis.slipping_utils import (
     build_flipped_labels,
     build_stress_subset_indices,
     evaluate_binary_predictions,
+    find_optimal_threshold,
     select_flip_indices,
     select_reference_candidates,
     select_strong_positive_candidates,
@@ -53,6 +54,7 @@ def parse_args():
     parser.add_argument("--hist_threshold", type=float, default=0.7)
     parser.add_argument("--min_concept_support", type=int, default=3)
     parser.add_argument("--pred_threshold", type=float, default=0.8)
+    parser.add_argument("--max_item_pred", type=float, default=-1.0)
     parser.add_argument("--max_concepts", type=int, default=0)
     parser.add_argument("--require_all_mastery", action="store_true")
     parser.add_argument("--min_item_support", type=int, default=0)
@@ -64,6 +66,8 @@ def parse_args():
     parser.add_argument("--eval_seeds", type=str, default="888,889,890")
     parser.add_argument("--candidate_file", type=str, default="")
     parser.add_argument("--stress_negative_multiplier", type=float, default=1.0)
+    parser.add_argument("--stress_negative_strategy", type=str, default="random", choices=["random", "hard"])
+    parser.add_argument("--stress_match_concept_counts", action="store_true")
     parser.add_argument("--item_drop_floor", type=float, default=0.05)
     parser.add_argument("--tag", type=str, default="")
     return parser.parse_args()
@@ -128,6 +132,20 @@ def main():
     )
     annotated = analysis_state["annotated"].copy()
     annotated["dataset"] = args.dataset
+    valid_state = build_annotated_prediction_frame(
+        dataset=args.dataset,
+        split="valid",
+        device=device,
+        model_type=args.model_type,
+        checkpoint=args.checkpoint,
+        save_root=args.save_root,
+        data_root=args.data_root,
+        graph_root=args.graph_root,
+        batch_size=args.batch_size,
+        model_config=build_model_config(args),
+        item_drop_floor=args.item_drop_floor,
+    )
+    valid_annotated = valid_state["annotated"].copy()
 
     if args.candidate_file:
         reference_df = pd.read_csv(args.candidate_file)
@@ -138,6 +156,7 @@ def main():
             hist_threshold=args.hist_threshold,
             min_concept_support=args.min_concept_support,
             pred_threshold=args.pred_threshold,
+            max_item_pred=args.max_item_pred if args.max_item_pred >= 0 else None,
             max_concepts=args.max_concepts if args.max_concepts > 0 else None,
             require_all_mastery=args.require_all_mastery,
             min_item_support=args.min_item_support,
@@ -158,6 +177,14 @@ def main():
 
     original_labels = annotated["label"].astype(int).to_numpy()
     predictions = annotated["p_pred"].astype(float).to_numpy()
+    valid_labels = valid_annotated["label"].astype(int).to_numpy()
+    valid_predictions = valid_annotated["p_pred"].astype(float).to_numpy()
+    calibrated_acc_threshold = find_optimal_threshold(valid_labels, valid_predictions, metric="acc")
+    balanced_acc_threshold = find_optimal_threshold(
+        valid_labels,
+        valid_predictions,
+        metric="balanced_acc",
+    )
 
     summary_rows = []
     sample_rows = []
@@ -170,16 +197,66 @@ def main():
                 candidate_mask.to_numpy(dtype=bool),
                 seed=eval_seed,
                 negative_multiplier=args.stress_negative_multiplier,
+                negative_scores=predictions,
+                concept_counts=annotated["concept_count"].to_numpy(dtype=int)
+                if "concept_count" in annotated.columns
+                else None,
+                negative_strategy=args.stress_negative_strategy,
+                match_concept_counts=args.stress_match_concept_counts,
             )
 
             full_original = evaluate_binary_predictions(original_labels, predictions)
             full_flipped = evaluate_binary_predictions(flipped_labels, predictions)
+            full_original_calibrated = evaluate_binary_predictions(
+                original_labels,
+                predictions,
+                threshold=calibrated_acc_threshold,
+            )
+            full_flipped_calibrated = evaluate_binary_predictions(
+                flipped_labels,
+                predictions,
+                threshold=calibrated_acc_threshold,
+            )
+            full_original_balanced = evaluate_binary_predictions(
+                original_labels,
+                predictions,
+                threshold=balanced_acc_threshold,
+            )
+            full_flipped_balanced = evaluate_binary_predictions(
+                flipped_labels,
+                predictions,
+                threshold=balanced_acc_threshold,
+            )
             if stress_indices:
                 stress_original = evaluate_binary_predictions(original_labels[stress_indices], predictions[stress_indices])
                 stress_flipped = evaluate_binary_predictions(flipped_labels[stress_indices], predictions[stress_indices])
+                stress_original_calibrated = evaluate_binary_predictions(
+                    original_labels[stress_indices],
+                    predictions[stress_indices],
+                    threshold=calibrated_acc_threshold,
+                )
+                stress_flipped_calibrated = evaluate_binary_predictions(
+                    flipped_labels[stress_indices],
+                    predictions[stress_indices],
+                    threshold=calibrated_acc_threshold,
+                )
+                stress_original_balanced = evaluate_binary_predictions(
+                    original_labels[stress_indices],
+                    predictions[stress_indices],
+                    threshold=balanced_acc_threshold,
+                )
+                stress_flipped_balanced = evaluate_binary_predictions(
+                    flipped_labels[stress_indices],
+                    predictions[stress_indices],
+                    threshold=balanced_acc_threshold,
+                )
             else:
                 stress_original = full_original
                 stress_flipped = full_flipped
+                stress_original_calibrated = full_original_calibrated
+                stress_flipped_calibrated = full_flipped_calibrated
+                stress_original_balanced = full_original_balanced
+                stress_flipped_balanced = full_flipped_balanced
 
             flipped_frame = annotated.loc[flip_indices].copy()
             summary_rows.append(
@@ -197,6 +274,16 @@ def main():
                     "original_acc": full_original["acc"],
                     "pseudo_acc": full_flipped["acc"],
                     "pseudo_acc_delta": full_flipped["acc"] - full_original["acc"],
+                    "calibrated_acc_threshold": calibrated_acc_threshold,
+                    "original_calibrated_acc": full_original_calibrated["acc"],
+                    "pseudo_calibrated_acc": full_flipped_calibrated["acc"],
+                    "pseudo_calibrated_acc_delta": full_flipped_calibrated["acc"]
+                    - full_original_calibrated["acc"],
+                    "balanced_acc_threshold": balanced_acc_threshold,
+                    "original_balanced_acc": full_original_balanced["balanced_acc"],
+                    "pseudo_balanced_acc": full_flipped_balanced["balanced_acc"],
+                    "pseudo_balanced_acc_delta": full_flipped_balanced["balanced_acc"]
+                    - full_original_balanced["balanced_acc"],
                     "original_rmse": full_original["rmse"],
                     "pseudo_rmse": full_flipped["rmse"],
                     "pseudo_rmse_delta": full_flipped["rmse"] - full_original["rmse"],
@@ -206,9 +293,19 @@ def main():
                     "stress_original_acc": stress_original["acc"],
                     "stress_acc": stress_flipped["acc"],
                     "stress_acc_delta": stress_flipped["acc"] - stress_original["acc"],
+                    "stress_original_calibrated_acc": stress_original_calibrated["acc"],
+                    "stress_calibrated_acc": stress_flipped_calibrated["acc"],
+                    "stress_calibrated_acc_delta": stress_flipped_calibrated["acc"]
+                    - stress_original_calibrated["acc"],
+                    "stress_original_balanced_acc": stress_original_balanced["balanced_acc"],
+                    "stress_balanced_acc": stress_flipped_balanced["balanced_acc"],
+                    "stress_balanced_acc_delta": stress_flipped_balanced["balanced_acc"]
+                    - stress_original_balanced["balanced_acc"],
                     "stress_original_rmse": stress_original["rmse"],
                     "stress_rmse": stress_flipped["rmse"],
                     "stress_rmse_delta": stress_flipped["rmse"] - stress_original["rmse"],
+                    "stress_negative_strategy": args.stress_negative_strategy,
+                    "stress_match_concept_counts": bool(args.stress_match_concept_counts),
                     "flipped_mean_p_pred": float(flipped_frame["p_pred"].mean()) if not flipped_frame.empty else np.nan,
                     "flipped_mean_concept_proxy_pred": float(flipped_frame["concept_proxy_pred"].mean()) if not flipped_frame.empty else np.nan,
                     "flipped_mean_hist_avg_rate": float(flipped_frame["hist_avg_rate"].mean()) if not flipped_frame.empty else np.nan,

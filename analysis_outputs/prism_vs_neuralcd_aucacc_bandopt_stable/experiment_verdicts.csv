@@ -1,0 +1,10 @@
+experiment,indicator,prism_wins,baseline_wins,ties,supports_prism_expected
+controlled_slip,auc_drop,3,0,0,True
+controlled_slip,acc_drop,3,0,0,True
+controlled_slip,tail_decoupling,3,0,0,True
+controlled_slip,knowledge_adjustment,3,0,0,True
+controlled_slip,overall,4,0,0,True
+case_study,adjustment_ratio,3,0,0,True
+case_study,adjustment_tail,3,0,0,True
+case_study,decoupling_gap,3,0,0,True
+case_study,overall,3,0,0,True

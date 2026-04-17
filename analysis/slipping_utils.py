@@ -2,7 +2,7 @@ import math
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, mean_squared_error, roc_auc_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, mean_squared_error, roc_auc_score
 
 
 def parse_cpt_seq(value):
@@ -138,6 +138,7 @@ def select_strong_positive_candidates(
     hist_threshold,
     min_concept_support,
     pred_threshold=None,
+    max_item_pred=None,
     max_concepts=None,
     require_all_mastery=False,
     min_item_support=0,
@@ -154,6 +155,8 @@ def select_strong_positive_candidates(
     )
     if pred_threshold is not None and "p_pred" in df.columns:
         mask = mask & (df["p_pred"].astype(float) >= float(pred_threshold))
+    if max_item_pred is not None and "p_pred" in df.columns:
+        mask = mask & (df["p_pred"].astype(float) <= float(max_item_pred))
     if max_concepts is not None:
         mask = mask & (df["concept_count"].astype(int) <= int(max_concepts))
     if require_all_mastery and "min_hist_mastery_rate" in df.columns:
@@ -198,7 +201,61 @@ def select_flip_indices(candidate_indices, ratio, seed):
     return sorted(int(idx) for idx in chosen.tolist())
 
 
-def build_stress_subset_indices(labels, candidate_mask, seed, negative_multiplier=1.0):
+def _sample_negative_indices(pool_indices, sample_size, rng, negative_strategy="random", negative_scores=None):
+    if sample_size <= 0:
+        return np.array([], dtype=int)
+
+    pool_indices = np.asarray(sorted({int(idx) for idx in pool_indices}), dtype=int)
+    if pool_indices.size == 0:
+        return np.array([], dtype=int)
+
+    sample_size = min(int(sample_size), int(pool_indices.size))
+    if sample_size <= 0:
+        return np.array([], dtype=int)
+
+    if negative_strategy == "random":
+        chosen = rng.choice(pool_indices, size=sample_size, replace=False)
+        return np.sort(chosen.astype(int))
+
+    if negative_strategy == "hard":
+        if negative_scores is None:
+            raise ValueError("negative_scores is required when negative_strategy='hard'.")
+        scores = np.asarray(negative_scores, dtype=float)
+        if scores.shape[0] <= int(pool_indices.max()):
+            raise ValueError("negative_scores length does not cover all pool indices.")
+        tie_break = rng.random(pool_indices.size)
+        order = np.lexsort((tie_break, -scores[pool_indices]))
+        chosen = pool_indices[order[:sample_size]]
+        return np.sort(chosen.astype(int))
+
+    raise ValueError(f"Unsupported negative_strategy: {negative_strategy}")
+
+
+def _allocate_match_targets(candidate_values, sample_size, rng):
+    candidate_values = np.asarray(candidate_values)
+    unique_values, counts = np.unique(candidate_values, return_counts=True)
+    expected = counts.astype(float) * float(sample_size) / float(counts.sum())
+    base = np.floor(expected).astype(int)
+    remainder = int(sample_size - base.sum())
+    if remainder > 0:
+        fractional = expected - base
+        tie_break = rng.random(len(unique_values))
+        order = np.lexsort((tie_break, -fractional))
+        for idx in order[:remainder]:
+            base[idx] += 1
+    return unique_values, base
+
+
+def build_stress_subset_indices(
+    labels,
+    candidate_mask,
+    seed,
+    negative_multiplier=1.0,
+    negative_scores=None,
+    concept_counts=None,
+    negative_strategy="random",
+    match_concept_counts=False,
+):
     labels = np.asarray(labels, dtype=int)
     candidate_mask = np.asarray(candidate_mask, dtype=bool)
     candidate_indices = np.flatnonzero(candidate_mask)
@@ -212,9 +269,54 @@ def build_stress_subset_indices(labels, candidate_mask, seed, negative_multiplie
     sample_size = min(sample_size, int(negative_indices.size))
 
     chosen_negatives = np.array([], dtype=int)
+    rng = np.random.default_rng(int(seed))
     if sample_size > 0:
-        rng = np.random.default_rng(int(seed))
-        chosen_negatives = rng.choice(negative_indices, size=sample_size, replace=False)
+        if match_concept_counts:
+            if concept_counts is None:
+                raise ValueError("concept_counts is required when match_concept_counts=True.")
+            concept_counts = np.asarray(concept_counts)
+            if concept_counts.shape[0] != labels.shape[0]:
+                raise ValueError("concept_counts must have the same length as labels.")
+            candidate_concepts = concept_counts[candidate_indices]
+            unique_values, concept_targets = _allocate_match_targets(candidate_concepts, sample_size, rng)
+            chosen_parts = []
+            remaining_negatives = set(int(idx) for idx in negative_indices.tolist())
+            missing = 0
+
+            for concept_value, target in zip(unique_values, concept_targets):
+                if target <= 0:
+                    continue
+                bucket = [idx for idx in remaining_negatives if concept_counts[idx] == concept_value]
+                chosen = _sample_negative_indices(
+                    bucket,
+                    target,
+                    rng,
+                    negative_strategy=negative_strategy,
+                    negative_scores=negative_scores,
+                )
+                chosen_parts.extend(int(idx) for idx in chosen.tolist())
+                remaining_negatives.difference_update(int(idx) for idx in chosen.tolist())
+                missing += max(int(target) - int(len(chosen)), 0)
+
+            if missing > 0:
+                fallback = _sample_negative_indices(
+                    sorted(remaining_negatives),
+                    missing,
+                    rng,
+                    negative_strategy=negative_strategy,
+                    negative_scores=negative_scores,
+                )
+                chosen_parts.extend(int(idx) for idx in fallback.tolist())
+
+            chosen_negatives = np.asarray(sorted(chosen_parts), dtype=int)
+        else:
+            chosen_negatives = _sample_negative_indices(
+                negative_indices,
+                sample_size,
+                rng,
+                negative_strategy=negative_strategy,
+                negative_scores=negative_scores,
+            )
 
     combined = np.concatenate([candidate_indices.astype(int), np.sort(chosen_negatives.astype(int))])
     return sorted(int(idx) for idx in combined.tolist())
@@ -228,17 +330,68 @@ def build_flipped_labels(labels, flip_indices):
     return flipped
 
 
-def evaluate_binary_predictions(labels, p_pred):
+def _candidate_thresholds(p_pred):
+    scores = np.asarray(p_pred, dtype=float)
+    finite_scores = np.unique(scores[np.isfinite(scores)])
+    if finite_scores.size == 0:
+        return np.array([0.5], dtype=float)
+    if finite_scores.size == 1:
+        single = float(finite_scores[0])
+        return np.array(sorted({0.0, 0.5, 1.0, single}), dtype=float)
+    midpoints = (finite_scores[:-1] + finite_scores[1:]) / 2.0
+    thresholds = np.concatenate([[0.0], midpoints, [1.0]])
+    thresholds = np.clip(thresholds, 0.0, 1.0)
+    return np.unique(thresholds.astype(float))
+
+
+def find_optimal_threshold(labels, p_pred, metric="acc"):
+    labels = np.asarray(labels, dtype=int)
+    scores = np.asarray(p_pred, dtype=float)
+    if labels.size == 0:
+        return 0.5
+
+    metric = str(metric).strip().lower()
+    if metric not in {"acc", "balanced_acc"}:
+        raise ValueError(f"Unsupported threshold metric: {metric}")
+
+    best_threshold = 0.5
+    best_score = -float("inf")
+    best_distance = float("inf")
+    for threshold in _candidate_thresholds(scores):
+        preds = scores > float(threshold)
+        if metric == "acc":
+            score = float(accuracy_score(labels, preds))
+        else:
+            score = float(balanced_accuracy_score(labels, preds))
+        distance = abs(float(threshold) - 0.5)
+        if (
+            score > best_score + 1e-12
+            or (abs(score - best_score) <= 1e-12 and distance < best_distance - 1e-12)
+            or (
+                abs(score - best_score) <= 1e-12
+                and abs(distance - best_distance) <= 1e-12
+                and float(threshold) < float(best_threshold)
+            )
+        ):
+            best_threshold = float(threshold)
+            best_score = score
+            best_distance = distance
+    return float(best_threshold)
+
+
+def evaluate_binary_predictions(labels, p_pred, threshold=0.5):
     labels = np.asarray(labels, dtype=int)
     p_pred = np.asarray(p_pred, dtype=float)
     if labels.size == 0:
-        return {"auc": 0.0, "acc": 0.0, "rmse": 0.0}
+        return {"auc": 0.0, "acc": 0.0, "balanced_acc": 0.0, "rmse": 0.0}
 
     try:
         auc = float(roc_auc_score(labels, p_pred))
     except ValueError:
         auc = 0.5
 
-    acc = float(accuracy_score(labels, p_pred > 0.5))
+    binary_preds = p_pred > float(threshold)
+    acc = float(accuracy_score(labels, binary_preds))
+    balanced_acc = float(balanced_accuracy_score(labels, binary_preds))
     rmse = float(math.sqrt(mean_squared_error(labels, p_pred)))
-    return {"auc": auc, "acc": acc, "rmse": rmse}
+    return {"auc": auc, "acc": acc, "balanced_acc": balanced_acc, "rmse": rmse}

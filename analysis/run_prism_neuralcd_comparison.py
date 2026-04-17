@@ -43,6 +43,12 @@ def parse_args():
     parser.add_argument("--prism_label", type=str, default="Prism-CD")
     parser.add_argument("--baseline_label", type=str, default="NeuralCD")
     parser.add_argument("--representative_case_k", type=int, default=5)
+    parser.add_argument(
+        "--slipping_acc_metric",
+        type=str,
+        default="raw",
+        choices=["raw", "calibrated", "balanced"],
+    )
     return parser.parse_args()
 
 
@@ -52,6 +58,35 @@ def parse_list(raw):
 
 def ensure_dir(path):
     Path(path).mkdir(parents=True, exist_ok=True)
+
+
+def resolve_slipping_acc_columns(acc_metric):
+    metric = str(acc_metric).strip().lower()
+    if metric == "raw":
+        return (
+            "pseudo_acc_delta_mean",
+            "stress_acc_delta_mean",
+            "pseudo_acc_delta_std",
+            "stress_acc_delta_std",
+            "ACC",
+        )
+    if metric == "calibrated":
+        return (
+            "pseudo_calibrated_acc_delta_mean",
+            "stress_calibrated_acc_delta_mean",
+            "pseudo_calibrated_acc_delta_std",
+            "stress_calibrated_acc_delta_std",
+            "Calibrated ACC",
+        )
+    if metric == "balanced":
+        return (
+            "pseudo_balanced_acc_delta_mean",
+            "stress_balanced_acc_delta_mean",
+            "pseudo_balanced_acc_delta_std",
+            "stress_balanced_acc_delta_std",
+            "Balanced ACC",
+        )
+    raise ValueError(f"Unsupported slipping_acc_metric: {acc_metric}")
 
 
 def resolve_baseline_source_mode(baseline_output_dir="", baseline_strict_dir=""):
@@ -104,7 +139,13 @@ def load_output_dir_case_results(root_dir, datasets):
     return pd.concat(rows, ignore_index=True)
 
 
-def build_verdict_ready_slipping_frame(plot_frame):
+def build_verdict_ready_slipping_frame(plot_frame, acc_metric="raw"):
+    pseudo_acc_col, stress_acc_col, _pseudo_std_col, _stress_std_col, _acc_label = resolve_slipping_acc_columns(
+        acc_metric
+    )
+    missing = {pseudo_acc_col, stress_acc_col}.difference(plot_frame.columns)
+    if missing:
+        raise ValueError(f"Missing slipping ACC columns for metric '{acc_metric}': {sorted(missing)}")
     return plot_frame[
         [
             "dataset",
@@ -112,8 +153,8 @@ def build_verdict_ready_slipping_frame(plot_frame):
             "ratio",
             "pseudo_auc_delta_mean",
             "stress_auc_delta_mean",
-            "pseudo_acc_delta_mean",
-            "stress_acc_delta_mean",
+            pseudo_acc_col,
+            stress_acc_col,
             "flipped_mean_p_pred_mean",
             "flipped_p75_decoupling_gap_mean",
             "flipped_p90_decoupling_gap_mean",
@@ -122,8 +163,8 @@ def build_verdict_ready_slipping_frame(plot_frame):
         columns={
             "pseudo_auc_delta_mean": "pseudo_auc_delta",
             "stress_auc_delta_mean": "stress_auc_delta",
-            "pseudo_acc_delta_mean": "pseudo_acc_delta",
-            "stress_acc_delta_mean": "stress_acc_delta",
+            pseudo_acc_col: "pseudo_acc_delta",
+            stress_acc_col: "stress_acc_delta",
             "flipped_mean_p_pred_mean": "flipped_mean_p_pred",
             "flipped_p75_decoupling_gap_mean": "flipped_p75_decoupling_gap",
             "flipped_p90_decoupling_gap_mean": "flipped_p90_decoupling_gap",
@@ -313,24 +354,39 @@ def merge_case_results_with_fallback(prism_cases, baseline_cases, prism_label="P
 
 
 def aggregate_slipping_for_plot(frame):
+    agg_spec = {
+        "pseudo_auc_delta_mean": ("pseudo_auc_delta", "mean"),
+        "pseudo_auc_delta_std": ("pseudo_auc_delta", "std"),
+        "stress_auc_delta_mean": ("stress_auc_delta", "mean"),
+        "stress_auc_delta_std": ("stress_auc_delta", "std"),
+        "pseudo_acc_delta_mean": ("pseudo_acc_delta", "mean"),
+        "pseudo_acc_delta_std": ("pseudo_acc_delta", "std"),
+        "stress_acc_delta_mean": ("stress_acc_delta", "mean"),
+        "stress_acc_delta_std": ("stress_acc_delta", "std"),
+        "flipped_mean_p_pred_mean": ("flipped_mean_p_pred", "mean"),
+        "flipped_mean_p_pred_std": ("flipped_mean_p_pred", "std"),
+        "flipped_p75_decoupling_gap_mean": ("flipped_p75_decoupling_gap", "mean"),
+        "flipped_p75_decoupling_gap_std": ("flipped_p75_decoupling_gap", "std"),
+        "flipped_p90_decoupling_gap_mean": ("flipped_p90_decoupling_gap", "mean"),
+        "flipped_p90_decoupling_gap_std": ("flipped_p90_decoupling_gap", "std"),
+    }
+    optional_specs = {
+        "pseudo_calibrated_acc_delta_mean": ("pseudo_calibrated_acc_delta", "mean"),
+        "pseudo_calibrated_acc_delta_std": ("pseudo_calibrated_acc_delta", "std"),
+        "stress_calibrated_acc_delta_mean": ("stress_calibrated_acc_delta", "mean"),
+        "stress_calibrated_acc_delta_std": ("stress_calibrated_acc_delta", "std"),
+        "pseudo_balanced_acc_delta_mean": ("pseudo_balanced_acc_delta", "mean"),
+        "pseudo_balanced_acc_delta_std": ("pseudo_balanced_acc_delta", "std"),
+        "stress_balanced_acc_delta_mean": ("stress_balanced_acc_delta", "mean"),
+        "stress_balanced_acc_delta_std": ("stress_balanced_acc_delta", "std"),
+    }
+    for out_col, spec in optional_specs.items():
+        if spec[0] in frame.columns:
+            agg_spec[out_col] = spec
+
     grouped = (
         frame.groupby(["dataset", "model", "ratio"], as_index=False)
-        .agg(
-            pseudo_auc_delta_mean=("pseudo_auc_delta", "mean"),
-            pseudo_auc_delta_std=("pseudo_auc_delta", "std"),
-            stress_auc_delta_mean=("stress_auc_delta", "mean"),
-            stress_auc_delta_std=("stress_auc_delta", "std"),
-            pseudo_acc_delta_mean=("pseudo_acc_delta", "mean"),
-            pseudo_acc_delta_std=("pseudo_acc_delta", "std"),
-            stress_acc_delta_mean=("stress_acc_delta", "mean"),
-            stress_acc_delta_std=("stress_acc_delta", "std"),
-            flipped_mean_p_pred_mean=("flipped_mean_p_pred", "mean"),
-            flipped_mean_p_pred_std=("flipped_mean_p_pred", "std"),
-            flipped_p75_decoupling_gap_mean=("flipped_p75_decoupling_gap", "mean"),
-            flipped_p75_decoupling_gap_std=("flipped_p75_decoupling_gap", "std"),
-            flipped_p90_decoupling_gap_mean=("flipped_p90_decoupling_gap", "mean"),
-            flipped_p90_decoupling_gap_std=("flipped_p90_decoupling_gap", "std"),
-        )
+        .agg(**agg_spec)
         .sort_values(["dataset", "ratio", "model"])
         .reset_index(drop=True)
     )
@@ -339,30 +395,34 @@ def aggregate_slipping_for_plot(frame):
     return grouped
 
 
-def plot_slipping_overview(frame, datasets, prism_label, baseline_label, output_dir):
+def plot_slipping_overview(frame, datasets, prism_label, baseline_label, output_dir, acc_metric="raw"):
+    _pseudo_acc_col, stress_acc_col, _pseudo_acc_std, stress_acc_std, acc_label = resolve_slipping_acc_columns(
+        acc_metric
+    )
     metrics = [
-        ("stress_auc_delta_mean", "stress_auc_delta_std", "Stress-subset AUC delta", True),
-        ("stress_acc_delta_mean", "stress_acc_delta_std", "Stress-subset ACC delta", True),
+        ("stress_auc_delta_mean", "stress_auc_delta_std", "Stress-subset\nAUC delta", True),
+        (stress_acc_col, stress_acc_std, f"Stress-subset\n{acc_label} delta", True),
         (
             "flipped_p75_decoupling_gap_mean",
             "flipped_p75_decoupling_gap_std",
-            "Upper-quartile decoupling gap (higher better)",
+            "Flipped-sample\nP75 decoupling gap",
             False,
         ),
         (
             "flipped_p90_decoupling_gap_mean",
             "flipped_p90_decoupling_gap_std",
-            "Upper-decile decoupling gap (higher better)",
+            "Flipped-sample\nP90 decoupling gap",
             False,
         ),
     ]
     colors = {prism_label: "#1f77b4", baseline_label: "#ff7f0e"}
 
-    fig, axes = plt.subplots(len(datasets), len(metrics), figsize=(19, 4.2 * len(datasets)))
+    fig, axes = plt.subplots(len(datasets), len(metrics), figsize=(21, 4.2 * len(datasets)))
     axes = np.atleast_2d(axes)
 
     for row_idx, dataset in enumerate(datasets):
         dataset_df = frame[frame["dataset"] == dataset]
+        ratio_ticks = sorted(dataset_df["ratio"].dropna().unique().tolist())
         for col_idx, (mean_col, std_col, title, is_delta) in enumerate(metrics):
             ax = axes[row_idx, col_idx]
             for model_label in (prism_label, baseline_label):
@@ -376,7 +436,8 @@ def plot_slipping_overview(frame, datasets, prism_label, baseline_label, output_
             if is_delta:
                 ax.axhline(0.0, linestyle="--", color="#666666", linewidth=1)
             ax.set_xlabel("Flip ratio")
-            ax.set_title(f"{dataset} | {title}")
+            ax.set_xticks(ratio_ticks)
+            ax.set_title(f"{dataset}\n{title}")
             if col_idx == 0:
                 ax.set_ylabel("Value")
 
@@ -455,10 +516,10 @@ def plot_case_overview(merged_frame, datasets, prism_label, baseline_label, outp
     return png_path, pdf_path
 
 
-def plot_controlled_slip_gain_summary(summary_frame, output_dir):
+def plot_controlled_slip_gain_summary(summary_frame, output_dir, acc_label="ACC"):
     metrics = [
         ("auc_drop_gain", "AUC drop gain"),
-        ("acc_drop_gain", "ACC drop gain"),
+        ("acc_drop_gain", f"{acc_label} drop gain"),
         ("p75_decoupling_gain", "P75 decoupling gain"),
         ("p90_decoupling_gain", "P90 decoupling gain"),
     ]
@@ -551,7 +612,15 @@ def write_artifact_index(output_dir):
     return path
 
 
-def write_report(output_dir, datasets, slipping_verdict, case_verdict, experiment_verdicts, baseline_source_mode):
+def write_report(
+    output_dir,
+    datasets,
+    slipping_verdict,
+    case_verdict,
+    experiment_verdicts,
+    baseline_source_mode,
+    slipping_acc_label="ACC",
+):
     controlled = experiment_verdicts[experiment_verdicts["experiment"] == "controlled_slip"].reset_index(drop=True)
     case_rows = experiment_verdicts[experiment_verdicts["experiment"] == "case_study"].reset_index(drop=True)
 
@@ -565,7 +634,7 @@ def write_report(output_dir, datasets, slipping_verdict, case_verdict, experimen
         f"Baseline source mode: {baseline_source_mode}",
         "",
         "Judgment rule:",
-        "- Dataset-level slipping comparison uses stress-subset AUC/ACC deltas plus flipped-sample upper-quartile / upper-decile decoupling gaps, averaged over all available flip ratios / evaluation seeds.",
+        f"- Dataset-level slipping comparison uses stress-subset AUC/{slipping_acc_label} deltas plus flipped-sample upper-quartile / upper-decile decoupling gaps, averaged over all available flip ratios / evaluation seeds.",
         "- For each indicator, the model that wins on more datasets is treated as better supported.",
         "- An experiment is marked as supported only when Prism-CD wins a strict majority of its implemented indicators.",
         "",
@@ -599,7 +668,7 @@ def write_report(output_dir, datasets, slipping_verdict, case_verdict, experimen
         "- This report compares the two implemented large experiments only: controlled slip simulation and case study.",
         "- Baseline inputs come from the local output directory when available; strict-dir loading is compatibility-only.",
         "- Controlled slip uses a stress subset built from all strong-positive candidates plus matched native negatives, so the pseudo-slip effect is not diluted by the entire test split.",
-        "- The old flipped-confidence indicator is kept only as supplemental context in raw tables. It is excluded from the formal verdict because fixed-prediction label-flip evaluation makes that score mechanically conflict with the AUC/ACC drop objective.",
+        f"- The old flipped-confidence indicator is kept only as supplemental context in raw tables. It is excluded from the formal verdict because fixed-prediction label-flip evaluation makes that score mechanically conflict with the AUC/{slipping_acc_label} drop objective.",
         "- Controlled slip now uses two stability-oriented behavior indicators: the flipped-sample upper-quartile decoupling gap and upper-decile decoupling gap. Higher is better and indicates that concept-level belief stays less suppressed than item-level correctness under pseudo slips, especially in the stronger-support tail.",
         "- Case study is illustrative: for each dataset it selects the top representative conflict cases where Prism-CD shows the clearest adjustment-ratio and decoupling advantage, then summarizes those examples with median / p90.",
         "- The stable concept-drop ratio uses an item-drop floor of 0.05 to avoid denominator blow-up.",
@@ -614,14 +683,22 @@ def main():
     args = parse_args()
     datasets = parse_list(args.datasets)
     ensure_dir(args.output_dir)
+    _pseudo_acc_col, _stress_acc_col, _pseudo_acc_std, _stress_acc_std, slipping_acc_label = resolve_slipping_acc_columns(
+        args.slipping_acc_metric
+    )
     baseline_source_mode = resolve_baseline_source_mode(
         baseline_output_dir=args.baseline_output_dir,
         baseline_strict_dir=args.baseline_strict_dir,
     )
+    if baseline_source_mode == "strict_dir" and args.slipping_acc_metric != "raw":
+        raise ValueError("Non-raw slipping ACC metrics require both models to be loaded from output_dir summaries.")
 
     prism_slipping_raw = load_output_dir_slipping_results(args.prism_output_dir, datasets, args.prism_label)
     prism_slipping_plot = aggregate_slipping_for_plot(prism_slipping_raw)
-    prism_slipping_for_verdict = build_verdict_ready_slipping_frame(prism_slipping_plot)
+    prism_slipping_for_verdict = build_verdict_ready_slipping_frame(
+        prism_slipping_plot,
+        acc_metric=args.slipping_acc_metric,
+    )
     if baseline_source_mode == "output_dir":
         baseline_slipping_raw = load_output_dir_slipping_results(
             args.baseline_output_dir,
@@ -629,7 +706,10 @@ def main():
             args.baseline_label,
         )
         baseline_slipping_plot = aggregate_slipping_for_plot(baseline_slipping_raw)
-        baseline_slipping_for_verdict = build_verdict_ready_slipping_frame(baseline_slipping_plot)
+        baseline_slipping_for_verdict = build_verdict_ready_slipping_frame(
+            baseline_slipping_plot,
+            acc_metric=args.slipping_acc_metric,
+        )
     else:
         baseline_slipping_plot = load_baseline_slipping_plot_summary(
             args.baseline_strict_dir,
@@ -695,6 +775,7 @@ def main():
         prism_label=args.prism_label,
         baseline_label=args.baseline_label,
         output_dir=args.output_dir,
+        acc_metric=args.slipping_acc_metric,
     )
     case_png, case_pdf = plot_case_overview(
         representative_cases,
@@ -706,6 +787,7 @@ def main():
     slip_gain_png, slip_gain_pdf = plot_controlled_slip_gain_summary(
         slipping_gain_summary,
         output_dir=args.output_dir,
+        acc_label=slipping_acc_label,
     )
     case_effect_png, case_effect_pdf = plot_case_study_effect_summary(
         case_effect_summary,
@@ -718,6 +800,7 @@ def main():
         case_verdict,
         experiment_verdicts,
         baseline_source_mode,
+        slipping_acc_label=slipping_acc_label,
     )
     artifact_index = write_artifact_index(args.output_dir)
 

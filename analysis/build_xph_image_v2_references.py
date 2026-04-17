@@ -46,6 +46,7 @@ def parse_args():
     parser.add_argument("--hist_threshold", type=float, default=0.85)
     parser.add_argument("--min_concept_support", type=int, default=4)
     parser.add_argument("--pred_threshold", type=float, default=0.85)
+    parser.add_argument("--max_item_pred", type=float, default=-1.0)
     parser.add_argument("--candidate_max_concepts", type=int, default=2)
     parser.add_argument("--require_all_mastery", action="store_true")
     parser.add_argument("--min_item_support", type=int, default=0)
@@ -113,6 +114,7 @@ def main():
         hist_threshold=args.hist_threshold,
         min_concept_support=args.min_concept_support,
         pred_threshold=args.pred_threshold,
+        max_item_pred=args.max_item_pred if args.max_item_pred >= 0 else None,
         max_concepts=args.candidate_max_concepts if args.candidate_max_concepts > 0 else None,
         require_all_mastery=args.require_all_mastery,
         min_item_support=args.min_item_support,
@@ -170,6 +172,7 @@ def main():
                 "hist_threshold": args.hist_threshold,
                 "min_concept_support": args.min_concept_support,
                 "pred_threshold": args.pred_threshold,
+                "max_item_pred": None if args.max_item_pred < 0 else args.max_item_pred,
                 "candidate_max_concepts": args.candidate_max_concepts,
                 "require_all_mastery": bool(args.require_all_mastery),
                 "min_item_support": args.min_item_support,
