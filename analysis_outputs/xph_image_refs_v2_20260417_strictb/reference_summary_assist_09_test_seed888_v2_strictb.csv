@@ -1,2 +1,0 @@
-dataset,split,selector_model_type,candidate_count,case_count,hist_threshold,min_concept_support,pred_threshold,candidate_max_concepts,require_all_mastery,min_item_support,min_item_acc,candidate_min_concept_proxy_pred,candidate_min_decoupling_gap,candidate_max_stable_ratio,case_max_concepts,case_min_item_pred,case_min_concept_proxy_pred,case_min_decoupling_gap
-assist_09,test,prism,1062,2,0.85,4,0.85,2,True,3,0.6,0.5,-0.35,,2,0.72,0.8,0.02

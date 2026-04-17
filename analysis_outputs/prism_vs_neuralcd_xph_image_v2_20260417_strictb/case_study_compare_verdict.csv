@@ -1,4 +1,0 @@
-dataset,prism_adjustment_ratio_median,baseline_adjustment_ratio_median,adjustment_ratio_better_model,prism_adjustment_ratio_p90,baseline_adjustment_ratio_p90,adjustment_tail_better_model,prism_decoupling_gap_median,baseline_decoupling_gap_median,decoupling_better_model,prism_win_metrics,baseline_win_metrics,tie_metrics,supports_prism_expected
-assist_09,0.4258359256524081,1.9525792400893143,Prism-CD,0.6056692972191898,2.5063475420779384,Prism-CD,0.060953259468078544,-0.1385060846805572,Prism-CD,3,0,0,True
-assist_17,0.7266424454473778,1.4283833223396014,Prism-CD,0.7723690525165643,1.7503019247631895,Prism-CD,0.07016813755035395,-0.09275507926940915,Prism-CD,3,0,0,True
-junyi,0.5817121677711632,6.596344392362414,Prism-CD,0.675901549697668,7.581745355469839,Prism-CD,0.0755555033683776,-0.3093088269233703,Prism-CD,3,0,0,True

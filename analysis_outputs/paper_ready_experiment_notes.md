@@ -13,7 +13,7 @@
 - 受控失误 shared reference：[`xph_image_refs_v2_aucacc_bandopt_stable`](./xph_image_refs_v2_aucacc_bandopt_stable)
 - 超参数分析目录：[`prism_hparam_sensitivity_xph_image_20260416`](./prism_hparam_sensitivity_xph_image_20260416)
 
-历史目录 [`prism_vs_neuralcd_xph_image_v2_20260417_strictb`](./prism_vs_neuralcd_xph_image_v2_20260417_strictb) 可以保留作对照，但不再作为正文首选口径。
+旧的 `strictb` 结果已经从顶层目录清理，不再作为正文引用口径。
 
 ---
 
@@ -74,8 +74,8 @@
 
 这次不是简单“换一张图”，而是把 controlled slip 的候选样本重新做了一轮**两阶段搜索**：
 
-1. 先做粗搜索：[`band_search_balanced_acc.csv`](./band_search_balanced_acc.csv)
-2. 再围绕最优区域做局部精搜：[`band_search_balanced_acc_refine.csv`](./band_search_balanced_acc_refine.csv)
+1. 先做粗搜索：[`band_search_balanced_acc.csv`](./xph_image_refs_v2_aucacc_bandopt_stable/band_search_balanced_acc.csv)
+2. 再围绕最优区域做局部精搜：[`band_search_balanced_acc_refine.csv`](./xph_image_refs_v2_aucacc_bandopt_stable/band_search_balanced_acc_refine.csv)
 
 精搜里确实找到过一个更尖的解，但那个解在 `assist_17` 上只保留了 `19` 个候选样本，数值更高，样本却更窄，不适合直接拿来写论文。
 
@@ -301,11 +301,36 @@
 
 - [`best_vs_default_gain_summary.png`](./prism_hparam_sensitivity_xph_image_20260416/best_vs_default_gain_summary.png)
 
+![超参数默认值与最佳值增益图](./prism_hparam_sensitivity_xph_image_20260416/best_vs_default_gain_summary.png)
+
+这张图最适合正文，读法很直接：
+
+- 横轴是三个数据集
+- 每组柱子表示“从默认参数到该单因子 sweep 中最佳点”的净增益
+- 柱子越高，说明该超参还有一定可调空间
+- 如果柱子整体不大，就说明默认参数本身已经处于比较稳定的工作区间
+
+当前这张图的论文含义不是“我们靠调参拿到了大幅提升”，而是：
+
+> 即使做单因子 sweep，收益也只是有限的小幅改善，说明默认配置已经比较稳，不是靠某个偶然参数点撑起来的。
+
 附录图继续推荐：
 
 - [`ortho_weight_sensitivity.png`](./prism_hparam_sensitivity_xph_image_20260416/ortho_weight_sensitivity.png)
 - [`dropout_sensitivity.png`](./prism_hparam_sensitivity_xph_image_20260416/dropout_sensitivity.png)
 - [`embedding_dim_sensitivity.png`](./prism_hparam_sensitivity_xph_image_20260416/embedding_dim_sensitivity.png)
+
+![ortho_weight 敏感性图](./prism_hparam_sensitivity_xph_image_20260416/ortho_weight_sensitivity.png)
+
+![dropout 敏感性图](./prism_hparam_sensitivity_xph_image_20260416/dropout_sensitivity.png)
+
+![embedding_dim 敏感性图](./prism_hparam_sensitivity_xph_image_20260416/embedding_dim_sensitivity.png)
+
+这三张图建议放附录，作用分别是：
+
+1. `ortho_weight`：说明正交约束不是越大越好，存在稳定区间。
+2. `dropout`：说明模型对正则强度有一定鲁棒性，默认值并不处在明显失效区。
+3. `embedding_dim`：说明表示维度继续变大并不会带来无上限收益，默认维度已经足够合理。
 
 ---
 
@@ -327,4 +352,3 @@
 正文里最稳妥的一句总括可以直接写成：
 
 > 综合受控失误模拟、案例分析与参数敏感性实验，Prism-CD 在冲突作答场景下表现出更稳定的概念层行为：它既能对局部错误保持反应，又不会将偶发性失误过度传播为真实知识缺陷；同时，这一结论并不依赖极端参数设置。
-
