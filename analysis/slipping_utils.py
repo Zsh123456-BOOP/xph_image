@@ -138,6 +138,13 @@ def select_strong_positive_candidates(
     hist_threshold,
     min_concept_support,
     pred_threshold=None,
+    max_concepts=None,
+    require_all_mastery=False,
+    min_item_support=0,
+    min_item_acc=None,
+    min_concept_proxy_pred=None,
+    min_decoupling_gap=None,
+    max_stable_concept_drop_ratio=None,
 ):
     mask = (
         (df["label"].astype(int) == 1)
@@ -147,6 +154,23 @@ def select_strong_positive_candidates(
     )
     if pred_threshold is not None and "p_pred" in df.columns:
         mask = mask & (df["p_pred"].astype(float) >= float(pred_threshold))
+    if max_concepts is not None:
+        mask = mask & (df["concept_count"].astype(int) <= int(max_concepts))
+    if require_all_mastery and "min_hist_mastery_rate" in df.columns:
+        mask = mask & (df["min_hist_mastery_rate"].fillna(-1.0) >= float(hist_threshold))
+    if int(min_item_support) > 0 and "item_train_support" in df.columns:
+        mask = mask & (df["item_train_support"].astype(int) >= int(min_item_support))
+    if min_item_acc is not None and "item_train_acc" in df.columns:
+        mask = mask & (df["item_train_acc"].fillna(-1.0) >= float(min_item_acc))
+    if min_concept_proxy_pred is not None and "concept_proxy_pred" in df.columns:
+        mask = mask & (df["concept_proxy_pred"].fillna(-1.0) >= float(min_concept_proxy_pred))
+    if min_decoupling_gap is not None and "decoupling_gap" in df.columns:
+        mask = mask & (df["decoupling_gap"].fillna(-1e9) >= float(min_decoupling_gap))
+    if max_stable_concept_drop_ratio is not None and "stable_concept_drop_ratio" in df.columns:
+        mask = mask & (
+            df["stable_concept_drop_ratio"].fillna(float("inf"))
+            <= float(max_stable_concept_drop_ratio)
+        )
     return mask
 
 

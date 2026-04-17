@@ -37,6 +37,9 @@ def select_conflict_cases(
     min_concept_support,
     max_concepts=2,
     min_item_pred=None,
+    min_concept_proxy_pred=None,
+    min_decoupling_gap=None,
+    min_item_support=0,
 ):
     cases = df.copy()
     cases = cases[
@@ -48,11 +51,23 @@ def select_conflict_cases(
     ]
     if min_item_pred is not None and "p_pred" in cases.columns:
         cases = cases[cases["p_pred"].astype(float) >= float(min_item_pred)]
+    if min_concept_proxy_pred is not None and "concept_proxy_pred" in cases.columns:
+        cases = cases[cases["concept_proxy_pred"].astype(float) >= float(min_concept_proxy_pred)]
+    if min_decoupling_gap is not None and "decoupling_gap" in cases.columns:
+        cases = cases[cases["decoupling_gap"].astype(float) >= float(min_decoupling_gap)]
+    if int(min_item_support) > 0 and "item_train_support" in cases.columns:
+        cases = cases[cases["item_train_support"].astype(int) >= int(min_item_support)]
 
-    return cases.sort_values(
-        by=["p_pred", "hist_avg_rate", "min_cpt_hist"],
-        ascending=[False, False, False],
-    ).reset_index(drop=True)
+    sort_columns = []
+    sort_order = []
+    for column in ["decoupling_gap", "concept_proxy_pred", "p_pred", "hist_avg_rate", "min_cpt_hist"]:
+        if column in cases.columns:
+            sort_columns.append(column)
+            sort_order.append(False)
+
+    if not sort_columns:
+        return cases.reset_index(drop=True)
+    return cases.sort_values(by=sort_columns, ascending=sort_order).reset_index(drop=True)
 
 
 def align_cases_to_reference(cases, reference_df):

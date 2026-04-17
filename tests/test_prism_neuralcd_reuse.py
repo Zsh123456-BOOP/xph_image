@@ -8,10 +8,70 @@ from analysis.run_prism_neuralcd_comparison import (
     merge_case_results_with_fallback,
     load_baseline_case_reference,
     load_baseline_slipping_summary,
+    load_output_dir_case_results,
+    load_output_dir_slipping_results,
 )
 
 
 class PrismNeuralCDReuseTests(unittest.TestCase):
+    def test_load_output_dir_slipping_results_derives_tail_gap_from_flipped_samples(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir)
+            slipping_dir = output_dir / "slipping"
+            slipping_dir.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(
+                [
+                    {
+                        "dataset": "assist_09",
+                        "ratio": 0.2,
+                        "eval_seed": 888,
+                        "pseudo_auc_delta": -0.03,
+                        "stress_auc_delta": -0.02,
+                        "pseudo_acc_delta": -0.04,
+                        "stress_acc_delta": -0.03,
+                        "flipped_mean_p_pred": 0.71,
+                        "flipped_p75_decoupling_gap": 0.10,
+                    }
+                ]
+            ).to_csv(slipping_dir / "slipping_assist_09_test_seed888_summary.csv", index=False)
+            pd.DataFrame(
+                [
+                    {"ratio": 0.2, "eval_seed": 888, "decoupling_gap": 0.10},
+                    {"ratio": 0.2, "eval_seed": 888, "decoupling_gap": 0.35},
+                    {"ratio": 0.2, "eval_seed": 888, "decoupling_gap": 0.50},
+                ]
+            ).to_csv(slipping_dir / "slipping_assist_09_test_seed888_flipped_samples.csv", index=False)
+
+            frame = load_output_dir_slipping_results(output_dir, ["assist_09"], "NeuralCD")
+
+        self.assertEqual(frame["model"].tolist(), ["NeuralCD"])
+        self.assertEqual(frame["dataset"].tolist(), ["assist_09"])
+        self.assertAlmostEqual(frame.loc[0, "flipped_p90_decoupling_gap"], 0.47, places=6)
+
+    def test_load_output_dir_case_results_reads_local_case_tables(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir)
+            case_dir = output_dir / "case_study"
+            case_dir.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(
+                [
+                    {
+                        "stu_id": 7,
+                        "exer_id": 11,
+                        "cpt_seq": "2",
+                        "hist_avg_rate": 0.92,
+                        "item_p_pred": 0.70,
+                        "concept_proxy_pred": 0.81,
+                    }
+                ]
+            ).to_csv(case_dir / "case_study_assist_17_test_seed888.csv", index=False)
+
+            frame = load_output_dir_case_results(output_dir, ["assist_17"])
+
+        self.assertEqual(frame["dataset"].tolist(), ["assist_17"])
+        self.assertEqual(frame["stu_id"].tolist(), ["7"])
+        self.assertEqual(frame["exer_id"].tolist(), ["11"])
+
     def test_load_baseline_slipping_summary_extracts_only_neuralcd(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             strict_dir = Path(tmp_dir)

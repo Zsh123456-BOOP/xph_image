@@ -27,9 +27,10 @@ from analysis.slipping_utils import (
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run controlled slip simulation for xph_image Prism-CD.")
+    parser = argparse.ArgumentParser(description="Run controlled slip simulation for xph_image models.")
     parser.add_argument("--dataset", type=str, required=True)
     parser.add_argument("--split", type=str, default="test", choices=["test", "valid"])
+    parser.add_argument("--model_type", type=str, default="prism", choices=["prism", "neuralcd"])
     parser.add_argument("--checkpoint", type=str, default="")
     parser.add_argument("--save_root", type=str, default="saved_models")
     parser.add_argument("--data_root", type=str, default="data")
@@ -46,9 +47,19 @@ def parse_args():
     parser.add_argument("--gated_num_gates", type=int, default=DEFAULT_MODEL_CONFIG["gated_num_gates"])
     parser.add_argument("--ortho_weight", type=float, default=DEFAULT_MODEL_CONFIG["ortho_weight"])
     parser.add_argument("--dropout", type=float, default=DEFAULT_MODEL_CONFIG["dropout"])
+    parser.add_argument("--neuralcd_prednet_len1", type=int, default=512)
+    parser.add_argument("--neuralcd_prednet_len2", type=int, default=256)
+    parser.add_argument("--neuralcd_disc_scale", type=float, default=10.0)
     parser.add_argument("--hist_threshold", type=float, default=0.7)
     parser.add_argument("--min_concept_support", type=int, default=3)
     parser.add_argument("--pred_threshold", type=float, default=0.8)
+    parser.add_argument("--max_concepts", type=int, default=0)
+    parser.add_argument("--require_all_mastery", action="store_true")
+    parser.add_argument("--min_item_support", type=int, default=0)
+    parser.add_argument("--min_item_acc", type=float, default=-1.0)
+    parser.add_argument("--min_concept_proxy_pred", type=float, default=-1.0)
+    parser.add_argument("--min_decoupling_gap", type=float, default=-1e9)
+    parser.add_argument("--max_stable_concept_drop_ratio", type=float, default=-1.0)
     parser.add_argument("--flip_ratios", type=str, default="0.1,0.2,0.3")
     parser.add_argument("--eval_seeds", type=str, default="888,889,890")
     parser.add_argument("--candidate_file", type=str, default="")
@@ -72,6 +83,13 @@ def ensure_dir(path):
 
 
 def build_model_config(args):
+    if args.model_type == "neuralcd":
+        return {
+            "dropout": args.dropout,
+            "prednet_len1": args.neuralcd_prednet_len1,
+            "prednet_len2": args.neuralcd_prednet_len2,
+            "discrimination_scale": args.neuralcd_disc_scale,
+        }
     return {
         "embedding_dim": args.embedding_dim,
         "num_layers": args.num_layers,
@@ -99,6 +117,7 @@ def main():
         dataset=args.dataset,
         split=args.split,
         device=device,
+        model_type=args.model_type,
         checkpoint=args.checkpoint,
         save_root=args.save_root,
         data_root=args.data_root,
@@ -119,6 +138,17 @@ def main():
             hist_threshold=args.hist_threshold,
             min_concept_support=args.min_concept_support,
             pred_threshold=args.pred_threshold,
+            max_concepts=args.max_concepts if args.max_concepts > 0 else None,
+            require_all_mastery=args.require_all_mastery,
+            min_item_support=args.min_item_support,
+            min_item_acc=args.min_item_acc if args.min_item_acc >= 0 else None,
+            min_concept_proxy_pred=args.min_concept_proxy_pred if args.min_concept_proxy_pred >= 0 else None,
+            min_decoupling_gap=args.min_decoupling_gap if args.min_decoupling_gap > -1e8 else None,
+            max_stable_concept_drop_ratio=(
+                args.max_stable_concept_drop_ratio
+                if args.max_stable_concept_drop_ratio >= 0
+                else None
+            ),
         )
     annotated["is_candidate"] = candidate_mask.astype(bool)
 

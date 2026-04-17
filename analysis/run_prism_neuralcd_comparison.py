@@ -30,14 +30,15 @@ from analysis.comparison_utils import (
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Compare Prism-CD and NeuralCD supplementary experiments.")
-    parser.add_argument("--prism_output_dir", type=str, default="analysis_outputs/prism_xph_image_supp_20260415")
+    parser.add_argument("--prism_output_dir", type=str, default="analysis_outputs/prism_xph_image_supp_v2")
+    parser.add_argument("--baseline_output_dir", type=str, default="analysis_outputs/neuralcd_xph_image_supp_v2")
     parser.add_argument(
         "--baseline_strict_dir",
         type=str,
         default="",
         help="Directory containing the previously generated merged NeuralCD/Prism strict comparison CSVs.",
     )
-    parser.add_argument("--output_dir", type=str, default="analysis_outputs/prism_vs_neuralcd_xph_image_20260415")
+    parser.add_argument("--output_dir", type=str, default="analysis_outputs/prism_vs_neuralcd_xph_image_v2")
     parser.add_argument("--datasets", type=str, default="assist_09,assist_17,junyi")
     parser.add_argument("--prism_label", type=str, default="Prism-CD")
     parser.add_argument("--baseline_label", type=str, default="NeuralCD")
@@ -53,7 +54,15 @@ def ensure_dir(path):
     Path(path).mkdir(parents=True, exist_ok=True)
 
 
-def load_prism_slipping_results(root_dir, datasets, model_label):
+def resolve_baseline_source_mode(baseline_output_dir="", baseline_strict_dir=""):
+    if str(baseline_output_dir).strip():
+        return "output_dir"
+    if str(baseline_strict_dir).strip():
+        return "strict_dir"
+    raise ValueError("Missing baseline source. Provide --baseline_output_dir or --baseline_strict_dir.")
+
+
+def load_output_dir_slipping_results(root_dir, datasets, model_label):
     rows = []
     slipping_dir = Path(root_dir) / "slipping"
     for dataset in datasets:
@@ -80,7 +89,7 @@ def load_prism_slipping_results(root_dir, datasets, model_label):
     return pd.concat(rows, ignore_index=True)
 
 
-def load_prism_case_results(root_dir, datasets):
+def load_output_dir_case_results(root_dir, datasets):
     rows = []
     case_dir = Path(root_dir) / "case_study"
     for dataset in datasets:
@@ -93,6 +102,33 @@ def load_prism_case_results(root_dir, datasets):
         frame["cpt_seq"] = frame["cpt_seq"].astype(str)
         rows.append(frame)
     return pd.concat(rows, ignore_index=True)
+
+
+def build_verdict_ready_slipping_frame(plot_frame):
+    return plot_frame[
+        [
+            "dataset",
+            "model",
+            "ratio",
+            "pseudo_auc_delta_mean",
+            "stress_auc_delta_mean",
+            "pseudo_acc_delta_mean",
+            "stress_acc_delta_mean",
+            "flipped_mean_p_pred_mean",
+            "flipped_p75_decoupling_gap_mean",
+            "flipped_p90_decoupling_gap_mean",
+        ]
+    ].rename(
+        columns={
+            "pseudo_auc_delta_mean": "pseudo_auc_delta",
+            "stress_auc_delta_mean": "stress_auc_delta",
+            "pseudo_acc_delta_mean": "pseudo_acc_delta",
+            "stress_acc_delta_mean": "stress_acc_delta",
+            "flipped_mean_p_pred_mean": "flipped_mean_p_pred",
+            "flipped_p75_decoupling_gap_mean": "flipped_p75_decoupling_gap",
+            "flipped_p90_decoupling_gap_mean": "flipped_p90_decoupling_gap",
+        }
+    )
 
 
 def load_baseline_slipping_plot_summary(strict_dir, datasets, baseline_label):
@@ -508,14 +544,14 @@ def write_artifact_index(output_dir):
         "",
         "## Note",
         "",
-        "所有图表与 CSV 均基于 strict 口径输出，不依赖 neutral / probe 目录。",
+        "所有图表与 CSV 均优先基于当前仓库的 Prism / NeuralCD 输出目录；只有兼容模式才回退到 strict 目录。",
     ]
     path = Path(output_dir) / "artifact_index.md"
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
 
 
-def write_report(output_dir, datasets, slipping_verdict, case_verdict, experiment_verdicts):
+def write_report(output_dir, datasets, slipping_verdict, case_verdict, experiment_verdicts, baseline_source_mode):
     controlled = experiment_verdicts[experiment_verdicts["experiment"] == "controlled_slip"].reset_index(drop=True)
     case_rows = experiment_verdicts[experiment_verdicts["experiment"] == "case_study"].reset_index(drop=True)
 
@@ -526,6 +562,7 @@ def write_report(output_dir, datasets, slipping_verdict, case_verdict, experimen
         "# Prism-CD vs NeuralCD Comparison",
         "",
         f"Datasets: {', '.join(datasets)}",
+        f"Baseline source mode: {baseline_source_mode}",
         "",
         "Judgment rule:",
         "- Dataset-level slipping comparison uses stress-subset AUC/ACC deltas plus flipped-sample upper-quartile / upper-decile decoupling gaps, averaged over all available flip ratios / evaluation seeds.",
@@ -560,6 +597,7 @@ def write_report(output_dir, datasets, slipping_verdict, case_verdict, experimen
         "",
         "## Notes",
         "- This report compares the two implemented large experiments only: controlled slip simulation and case study.",
+        "- Baseline inputs come from the local output directory when available; strict-dir loading is compatibility-only.",
         "- Controlled slip uses a stress subset built from all strong-positive candidates plus matched native negatives, so the pseudo-slip effect is not diluted by the entire test split.",
         "- The old flipped-confidence indicator is kept only as supplemental context in raw tables. It is excluded from the formal verdict because fixed-prediction label-flip evaluation makes that score mechanically conflict with the AUC/ACC drop objective.",
         "- Controlled slip now uses two stability-oriented behavior indicators: the flipped-sample upper-quartile decoupling gap and upper-decile decoupling gap. Higher is better and indicates that concept-level belief stays less suppressed than item-level correctness under pseudo slips, especially in the stronger-support tail.",
@@ -576,45 +614,33 @@ def main():
     args = parse_args()
     datasets = parse_list(args.datasets)
     ensure_dir(args.output_dir)
-    if not args.baseline_strict_dir:
-        raise ValueError("Missing --baseline_strict_dir. Provide the existing strict NeuralCD comparison directory.")
+    baseline_source_mode = resolve_baseline_source_mode(
+        baseline_output_dir=args.baseline_output_dir,
+        baseline_strict_dir=args.baseline_strict_dir,
+    )
 
-    prism_slipping_raw = load_prism_slipping_results(args.prism_output_dir, datasets, args.prism_label)
+    prism_slipping_raw = load_output_dir_slipping_results(args.prism_output_dir, datasets, args.prism_label)
     prism_slipping_plot = aggregate_slipping_for_plot(prism_slipping_raw)
-    prism_slipping_for_verdict = prism_slipping_plot[
-        [
-            "dataset",
-            "model",
-            "ratio",
-            "pseudo_auc_delta_mean",
-            "stress_auc_delta_mean",
-            "pseudo_acc_delta_mean",
-            "stress_acc_delta_mean",
-            "flipped_mean_p_pred_mean",
-            "flipped_p75_decoupling_gap_mean",
-            "flipped_p90_decoupling_gap_mean",
-        ]
-    ].rename(
-        columns={
-            "pseudo_auc_delta_mean": "pseudo_auc_delta",
-            "stress_auc_delta_mean": "stress_auc_delta",
-            "pseudo_acc_delta_mean": "pseudo_acc_delta",
-            "stress_acc_delta_mean": "stress_acc_delta",
-            "flipped_mean_p_pred_mean": "flipped_mean_p_pred",
-            "flipped_p75_decoupling_gap_mean": "flipped_p75_decoupling_gap",
-            "flipped_p90_decoupling_gap_mean": "flipped_p90_decoupling_gap",
-        }
-    )
-    baseline_slipping_plot = load_baseline_slipping_plot_summary(
-        args.baseline_strict_dir,
-        datasets,
-        args.baseline_label,
-    )
-    baseline_slipping_for_verdict = load_baseline_slipping_summary(
-        args.baseline_strict_dir,
-        datasets,
-        args.baseline_label,
-    )
+    prism_slipping_for_verdict = build_verdict_ready_slipping_frame(prism_slipping_plot)
+    if baseline_source_mode == "output_dir":
+        baseline_slipping_raw = load_output_dir_slipping_results(
+            args.baseline_output_dir,
+            datasets,
+            args.baseline_label,
+        )
+        baseline_slipping_plot = aggregate_slipping_for_plot(baseline_slipping_raw)
+        baseline_slipping_for_verdict = build_verdict_ready_slipping_frame(baseline_slipping_plot)
+    else:
+        baseline_slipping_plot = load_baseline_slipping_plot_summary(
+            args.baseline_strict_dir,
+            datasets,
+            args.baseline_label,
+        )
+        baseline_slipping_for_verdict = load_baseline_slipping_summary(
+            args.baseline_strict_dir,
+            datasets,
+            args.baseline_label,
+        )
     slipping_raw = pd.concat([prism_slipping_for_verdict, baseline_slipping_for_verdict], ignore_index=True)
     slipping_plot = pd.concat([prism_slipping_plot, baseline_slipping_plot], ignore_index=True)
     slipping_plot = slipping_plot.sort_values(["dataset", "ratio", "model"]).reset_index(drop=True)
@@ -624,8 +650,11 @@ def main():
         baseline_label=args.baseline_label,
     )
 
-    prism_cases = load_prism_case_results(args.prism_output_dir, datasets)
-    baseline_cases = load_baseline_case_reference(args.baseline_strict_dir, datasets)
+    prism_cases = load_output_dir_case_results(args.prism_output_dir, datasets)
+    if baseline_source_mode == "output_dir":
+        baseline_cases = load_output_dir_case_results(args.baseline_output_dir, datasets)
+    else:
+        baseline_cases = load_baseline_case_reference(args.baseline_strict_dir, datasets)
     merged_cases = merge_case_results_with_fallback(
         prism_cases,
         baseline_cases,
@@ -688,6 +717,7 @@ def main():
         slipping_verdict,
         case_verdict,
         experiment_verdicts,
+        baseline_source_mode,
     )
     artifact_index = write_artifact_index(args.output_dir)
 

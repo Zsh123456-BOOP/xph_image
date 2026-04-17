@@ -136,6 +136,63 @@ class SlippingUtilsTests(unittest.TestCase):
 
         self.assertEqual(mask.tolist(), [False, True, True])
 
+    def test_select_strong_positive_candidates_supports_stricter_filters(self):
+        annotated = pd.DataFrame(
+            [
+                {
+                    "label": 1,
+                    "concept_count": 1,
+                    "hist_avg_rate": 0.95,
+                    "min_hist_mastery_rate": 0.95,
+                    "min_cpt_hist": 5,
+                    "p_pred": 0.93,
+                    "concept_proxy_pred": 0.71,
+                    "decoupling_gap": -0.22,
+                    "item_train_support": 4,
+                    "item_train_acc": 0.80,
+                },
+                {
+                    "label": 1,
+                    "concept_count": 2,
+                    "hist_avg_rate": 0.92,
+                    "min_hist_mastery_rate": 0.91,
+                    "min_cpt_hist": 5,
+                    "p_pred": 0.95,
+                    "concept_proxy_pred": 0.84,
+                    "decoupling_gap": -0.11,
+                    "item_train_support": 6,
+                    "item_train_acc": 0.90,
+                },
+                {
+                    "label": 1,
+                    "concept_count": 1,
+                    "hist_avg_rate": 0.90,
+                    "min_hist_mastery_rate": 0.60,
+                    "min_cpt_hist": 5,
+                    "p_pred": 0.94,
+                    "concept_proxy_pred": 0.62,
+                    "decoupling_gap": -0.32,
+                    "item_train_support": 5,
+                    "item_train_acc": 0.85,
+                },
+            ]
+        )
+
+        candidate_mask = select_strong_positive_candidates(
+            annotated,
+            hist_threshold=0.9,
+            min_concept_support=4,
+            pred_threshold=0.9,
+            max_concepts=1,
+            require_all_mastery=True,
+            min_item_support=3,
+            min_item_acc=0.75,
+            min_concept_proxy_pred=0.7,
+            min_decoupling_gap=-0.25,
+        )
+
+        self.assertEqual(candidate_mask.tolist(), [True, False, False])
+
 
 if __name__ == "__main__":
     unittest.main()

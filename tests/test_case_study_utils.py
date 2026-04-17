@@ -108,6 +108,58 @@ class CaseStudyUtilsTests(unittest.TestCase):
         self.assertEqual(aligned["stu_id"].tolist(), ["1284", "747"])
         self.assertEqual(aligned["exer_id"].tolist(), [86, 158])
 
+    def test_select_conflict_cases_supports_stricter_gap_filters(self):
+        df = pd.DataFrame(
+            [
+                {
+                    "stu_id": "s1",
+                    "label": 0,
+                    "concept_count": 1,
+                    "hist_avg_rate": 0.95,
+                    "min_cpt_hist": 6,
+                    "p_pred": 0.78,
+                    "concept_proxy_pred": 0.88,
+                    "decoupling_gap": 0.10,
+                    "item_train_support": 5,
+                },
+                {
+                    "stu_id": "s2",
+                    "label": 0,
+                    "concept_count": 1,
+                    "hist_avg_rate": 0.94,
+                    "min_cpt_hist": 6,
+                    "p_pred": 0.80,
+                    "concept_proxy_pred": 0.82,
+                    "decoupling_gap": 0.02,
+                    "item_train_support": 5,
+                },
+                {
+                    "stu_id": "s3",
+                    "label": 0,
+                    "concept_count": 1,
+                    "hist_avg_rate": 0.93,
+                    "min_cpt_hist": 6,
+                    "p_pred": 0.77,
+                    "concept_proxy_pred": 0.86,
+                    "decoupling_gap": 0.09,
+                    "item_train_support": 1,
+                },
+            ]
+        )
+
+        cases = select_conflict_cases(
+            df,
+            hist_threshold=0.9,
+            min_concept_support=5,
+            max_concepts=2,
+            min_item_pred=0.75,
+            min_concept_proxy_pred=0.85,
+            min_decoupling_gap=0.08,
+            min_item_support=3,
+        )
+
+        self.assertEqual(cases["stu_id"].tolist(), ["s1"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,9 +22,10 @@ from analysis.case_study_utils import (
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run representative case-study extraction for xph_image Prism-CD.")
+    parser = argparse.ArgumentParser(description="Run representative case-study extraction for xph_image models.")
     parser.add_argument("--dataset", type=str, required=True)
     parser.add_argument("--split", type=str, default="test", choices=["test", "valid"])
+    parser.add_argument("--model_type", type=str, default="prism", choices=["prism", "neuralcd"])
     parser.add_argument("--checkpoint", type=str, default="")
     parser.add_argument("--save_root", type=str, default="saved_models")
     parser.add_argument("--data_root", type=str, default="data")
@@ -41,10 +42,16 @@ def parse_args():
     parser.add_argument("--gated_num_gates", type=int, default=DEFAULT_MODEL_CONFIG["gated_num_gates"])
     parser.add_argument("--ortho_weight", type=float, default=DEFAULT_MODEL_CONFIG["ortho_weight"])
     parser.add_argument("--dropout", type=float, default=DEFAULT_MODEL_CONFIG["dropout"])
+    parser.add_argument("--neuralcd_prednet_len1", type=int, default=512)
+    parser.add_argument("--neuralcd_prednet_len2", type=int, default=256)
+    parser.add_argument("--neuralcd_disc_scale", type=float, default=10.0)
     parser.add_argument("--hist_threshold", type=float, default=0.7)
     parser.add_argument("--min_concept_support", type=int, default=3)
     parser.add_argument("--max_concepts", type=int, default=2)
     parser.add_argument("--min_item_pred", type=float, default=0.7)
+    parser.add_argument("--min_concept_proxy_pred", type=float, default=-1.0)
+    parser.add_argument("--min_decoupling_gap", type=float, default=-1.0)
+    parser.add_argument("--min_item_support", type=int, default=0)
     parser.add_argument("--top_k", type=int, default=5)
     parser.add_argument("--case_file", type=str, default="")
     parser.add_argument("--item_drop_floor", type=float, default=0.05)
@@ -57,6 +64,13 @@ def ensure_dir(path):
 
 
 def build_model_config(args):
+    if args.model_type == "neuralcd":
+        return {
+            "dropout": args.dropout,
+            "prednet_len1": args.neuralcd_prednet_len1,
+            "prednet_len2": args.neuralcd_prednet_len2,
+            "discrimination_scale": args.neuralcd_disc_scale,
+        }
     return {
         "embedding_dim": args.embedding_dim,
         "num_layers": args.num_layers,
@@ -78,6 +92,7 @@ def main():
         dataset=args.dataset,
         split=args.split,
         device=device,
+        model_type=args.model_type,
         checkpoint=args.checkpoint,
         save_root=args.save_root,
         data_root=args.data_root,
@@ -98,6 +113,9 @@ def main():
             min_concept_support=args.min_concept_support,
             max_concepts=args.max_concepts,
             min_item_pred=args.min_item_pred,
+            min_concept_proxy_pred=args.min_concept_proxy_pred if args.min_concept_proxy_pred >= 0 else None,
+            min_decoupling_gap=args.min_decoupling_gap if args.min_decoupling_gap >= 0 else None,
+            min_item_support=args.min_item_support,
         )
     if args.top_k > 0:
         cases = cases.head(args.top_k).reset_index(drop=True)
