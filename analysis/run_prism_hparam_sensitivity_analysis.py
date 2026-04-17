@@ -258,6 +258,24 @@ def write_notes(best_summary, gain_summary, output_dir):
         .reset_index(drop=True)
     )
     most_auc_sensitive = mean_gain.iloc[0]
+    non_default = gain_summary[~np.isclose(gain_summary["best_value_by_auc"], gain_summary["default_value"])]
+    non_default_text = (
+        ", ".join(
+            f"{row.dataset}/{row.hparam} -> {row.best_value_label}"
+            for row in non_default.sort_values(["dataset", "hparam"]).itertuples(index=False)
+        )
+        if not non_default.empty
+        else "所有数据集上的最佳点都与默认值一致"
+    )
+    default_stable = gain_summary[np.isclose(gain_summary["best_value_by_auc"], gain_summary["default_value"])]
+    default_stable_text = (
+        ", ".join(
+            f"{row.dataset}/{row.hparam}"
+            for row in default_stable.sort_values(["dataset", "hparam"]).itertuples(index=False)
+        )
+        if not default_stable.empty
+        else "无"
+    )
 
     lines = [
         "# Prism-CD 参数敏感性实验说明",
@@ -275,9 +293,9 @@ def write_notes(best_summary, gain_summary, output_dir):
         f"- 按平均 AUC 增益看，`{most_auc_sensitive['hparam']}` 的波动最明显，其平均 AUC 增益为 {most_auc_sensitive['auc_gain_vs_default']:.4f}。",
         f"- 单项最大 AUC 增益出现在 `{top_auc_row['dataset']}` 的 `{top_auc_row['hparam']}`，默认值到最优值带来 {top_auc_row['auc_gain_vs_default']:.4f} 的 AUC 提升。",
         f"- 单项最大 ACC 增益出现在 `{top_acc_row['dataset']}` 的 `{top_acc_row['hparam']}`，默认值到最优值带来 {top_acc_row['acc_gain_vs_default']:.4f} 的 ACC 提升。",
-        "- 从跨数据集一致性与 ACC 受益看，`ortho_weight` 更值得优先调节，其中 `assist_09` 的提升最明显。",
-        "- `dropout` 只在 `assist_17` 上出现轻微改善，`assist_09` 和 `junyi` 的默认值已经处于最优点。",
-        "- `embedding_dim` 的最优 AUC 在不同数据集上略有变化，但收益整体小于 `ortho_weight`，说明它更适合作为次级调节参数。",
+        f"- 相对默认配置，发生非默认最佳点的数据集/参数组合共有 {len(non_default)} 个：{non_default_text}。",
+        f"- 当前 sweep 中默认值已经等于最佳点的组合有 {len(default_stable)} 个：{default_stable_text}。",
+        "- 整体看，三个超参数带来的收益都不大，说明正式配置并不是依赖单一偶然参数点支撑起来的。",
         "",
         "## Best-by-AUC Summary",
         "",
@@ -287,10 +305,10 @@ def write_notes(best_summary, gain_summary, output_dir):
         "",
         "## Recommendation",
         "",
-        "- 如果只允许优先调一个参数，建议先调 `ortho_weight`。",
+        f"- 如果只允许优先调一个参数，建议先调 `{most_auc_sensitive['hparam']}`，因为它在当前 sweep 中带来的平均 AUC 增益最高。",
         "- 如果目标是保持当前主实验口径稳定，默认配置整体已经足够稳，不建议仅凭单因子 sweep 直接改动全部正式实验配置。",
-        "- `assist_17` 可以把 `dropout` 从默认值继续下探，但收益通常较小，应与正式对比实验重新联动验证。",
-        "- `embedding_dim` 的变化对不同指标并不总是同向，除非后续进行联合调参，否则建议保持现有默认值。",
+        "- `ACC` 与 `AUC` 并不总是同向提升，因此若要替换正式配置，建议以联合调参或二次验证为准，而不是只看单个最佳 AUC 点。",
+        "- 更适合把这组实验写成“稳定性与调参空间有限”的证据，而不是写成“大幅调参后性能显著提升”。",
         "",
         "## Reading Guide",
         "",
@@ -311,10 +329,11 @@ def write_artifact_index(output_dir):
         "",
         "- `prism_hparam_sensitivity_summary.csv`: sweep 明细结果。",
         "- `prism_hparam_sensitivity_best.csv`: 每个数据集/超参按 AUC 选出的最佳点。",
+        "- `prism_hparam_gain_summary.csv`: 默认值到最佳点的 AUC/ACC 净增益。",
         "- `best_vs_default_gain_summary.png`: 默认值到最佳点的增益总览图。",
-        "- `hyper_weight_sensitivity.png`: `hyper_weight` 敏感性主图。",
+        "- `ortho_weight_sensitivity.png`: `ortho_weight` 敏感性主图。",
         "- `dropout_sensitivity.png`: `dropout` 敏感性主图。",
-        "- `hidden_dim_sensitivity.png`: `hidden_dim` 敏感性主图。",
+        "- `embedding_dim_sensitivity.png`: `embedding_dim` 敏感性主图。",
         "- `prism_hparam_sensitivity_notes.md`: 论文写作说明。",
     ]
     path = Path(output_dir) / "artifact_index.md"
